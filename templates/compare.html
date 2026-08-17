@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}{{ season }} Driver Comparison{% endblock %}
+{% block meta_description %}Head-to-head Formula 1 driver comparison for the {{ season }} season.{% endblock %}
+
+{% block head_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Head-to-Head Comparison</h1>
+    <p class="page-subtitle">{{ season }} Season</p>
+</div>
+
+<!-- Driver Picker -->
+<section class="card card-accent" id="compare-picker-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">⚔️</span> Select Drivers</h2>
+    </div>
+    <form class="compare-form" action="/compare" method="get">
+        <div class="compare-selects">
+            <div class="compare-select-group">
+                <label class="compare-label">Driver 1</label>
+                <select name="d1" class="compare-select" id="compare-d1">
+                    <option value="">Choose driver...</option>
+                    {% for d in driver_standings %}
+                    <option value="{{ d.driver_code }}" {% if d1 and d1.info.driver_code == d.driver_code %}selected{% endif %}>
+                        {{ d.driver_code }} — {{ d.driver_name }} ({{ d.constructor }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="compare-vs">VS</div>
+            <div class="compare-select-group">
+                <label class="compare-label">Driver 2</label>
+                <select name="d2" class="compare-select" id="compare-d2">
+                    <option value="">Choose driver...</option>
+                    {% for d in driver_standings %}
+                    <option value="{{ d.driver_code }}" {% if d2 and d2.info.driver_code == d.driver_code %}selected{% endif %}>
+                        {{ d.driver_code }} — {{ d.driver_name }} ({{ d.constructor }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="compare-btn" id="compare-submit">Compare</button>
+    </form>
+</section>
+
+{% if error %}
+<section class="card empty-card">
+    <div class="empty-state">
+        <span class="empty-icon">⚠️</span>
+        <h3>{{ error }}</h3>
+    </div>
+</section>
+{% endif %}
+
+{% if d1 and d2 %}
+<!-- Head-to-Head Summary -->
+<section class="card" id="h2h-summary-section">
+    <div class="compare-header">
+        <div class="compare-driver-card" style="border-color: {{ get_team_colour(d1.info.constructor) }}">
+            <div class="team-colour-dot" style="background: {{ get_team_colour(d1.info.constructor) }}"></div>
+            <div class="compare-driver-info">
+                <span class="compare-driver-code mono">{{ d1.info.driver_code }}</span>
+                <span class="compare-driver-name">{{ d1.info.driver_name }}</span>
+                <span class="compare-driver-team" style="color: {{ get_team_colour(d1.info.constructor) }}">{{ d1.info.constructor }}</span>
+            </div>
+            <span class="compare-driver-points mono">{{ d1.info.points | int }} PTS</span>
+        </div>
+        <div class="compare-vs-badge">VS</div>
+        <div class="compare-driver-card" style="border-color: {{ get_team_colour(d2.info.constructor) }}">
+            <div class="team-colour-dot" style="background: {{ get_team_colour(d2.info.constructor) }}"></div>
+            <div class="compare-driver-info">
+                <span class="compare-driver-code mono">{{ d2.info.driver_code }}</span>
+                <span class="compare-driver-name">{{ d2.info.driver_name }}</span>
+                <span class="compare-driver-team" style="color: {{ get_team_colour(d2.info.constructor) }}">{{ d2.info.constructor }}</span>
+            </div>
+            <span class="compare-driver-points mono">{{ d2.info.points | int }} PTS</span>
+        </div>
+    </div>
+</section>
+
+<!-- Stats Comparison -->
+<section class="card" id="stats-comparison-section">
+    <div class="card-header">
+        <h2 class="card-title">📊 Stats Comparison</h2>
+    </div>
+    <div class="compare-stats-grid">
+        {% set stats = [
+            ("Wins", d1.wins, d2.wins),
+            ("Podiums", d1.podiums, d2.podiums),
+            ("Avg Finish", d1.avg_finish, d2.avg_finish),
+            ("Best Finish", d1.best_finish, d2.best_finish),
+            ("Avg Quali", d1.avg_quali, d2.avg_quali),
+            ("Best Quali", d1.best_quali, d2.best_quali),
+        ] %}
+        {% for label, v1, v2 in stats %}
+        <div class="compare-stat-row">
+            <span class="compare-stat-val mono {% if v1 < v2 and label in ['Avg Finish', 'Best Finish', 'Avg Quali', 'Best Quali'] %}highlight{% elif v1 > v2 and label in ['Wins', 'Podiums'] %}highlight{% endif %}" style="color: {{ get_team_colour(d1.info.constructor) }}">{{ v1 }}</span>
+            <span class="compare-stat-label">{{ label }}</span>
+            <span class="compare-stat-val mono {% if v2 < v1 and label in ['Avg Finish', 'Best Finish', 'Avg Quali', 'Best Quali'] %}highlight{% elif v2 > v1 and label in ['Wins', 'Podiums'] %}highlight{% endif %}" style="color: {{ get_team_colour(d2.info.constructor) }}">{{ v2 }}</span>
+        </div>
+        {% endfor %}
+        <div class="compare-stat-row">
+            <span class="compare-stat-val mono" style="color: {{ get_team_colour(d1.info.constructor) }}">{{ h2h_race }}</span>
+            <span class="compare-stat-label">Race H2H (of {{ h2h_race_total }})</span>
+            <span class="compare-stat-val mono" style="color: {{ get_team_colour(d2.info.constructor) }}">{{ h2h_race_total - h2h_race }}</span>
+        </div>
+        <div class="compare-stat-row">
+            <span class="compare-stat-val mono" style="color: {{ get_team_colour(d1.info.constructor) }}">{{ h2h_quali }}</span>
+            <span class="compare-stat-label">Quali H2H (of {{ h2h_quali_total }})</span>
+            <span class="compare-stat-val mono" style="color: {{ get_team_colour(d2.info.constructor) }}">{{ h2h_quali_total - h2h_quali }}</span>
+        </div>
+    </div>
+</section>
+
+<!-- Comparison Chart -->
+<section class="card" id="comparison-chart-section">
+    <div class="card-header">
+        <h2 class="card-title">📊 Visual Comparison</h2>
+    </div>
+    <div class="chart-container">
+        <canvas id="comparisonChart" height="300"></canvas>
+    </div>
+</section>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if d1 and d2 %}
+<script>
+    const comparisonData = {
+        labels: ['Wins', 'Podiums', 'Avg Finish', 'Best Finish'],
+        driver1: {
+            name: '{{ d1.info.driver_code }}',
+            colour: '{{ get_team_colour(d1.info.constructor) }}',
+            values: [{{ d1.wins }}, {{ d1.podiums }}, {{ d1.avg_finish }}, {{ d1.best_finish }}],
+        },
+        driver2: {
+            name: '{{ d2.info.driver_code }}',
+            colour: '{{ get_team_colour(d2.info.constructor) }}',
+            values: [{{ d2.wins }}, {{ d2.podiums }}, {{ d2.avg_finish }}, {{ d2.best_finish }}],
+        },
+    };
+
+    document.addEventListener('DOMContentLoaded', function() {
+        initComparisonChart('comparisonChart', comparisonData);
+    });
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+
+{% block title %}{{ driver.driver_name if driver else 'Driver' }} — {{ season }} Profile{% endblock %}
+{% block meta_description %}{{ season }} season stats and race-by-race results for {{ driver.driver_name if driver else 'driver' }}.{% endblock %}
+
+{% block head_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+{% if driver %}
+<div class="page-header race-header">
+    <div class="race-header-top">
+        <a href="/standings" class="back-link" id="back-to-standings">← Standings</a>
+    </div>
+    <h1 class="page-title">
+        <div class="team-colour-dot" style="background: {{ get_team_colour(driver.constructor) }}; width: 16px; height: 16px; display: inline-block; border-radius: 50%; margin-right: 8px;"></div>
+        {{ driver.driver_name }}
+    </h1>
+    <p class="page-subtitle" style="color: {{ get_team_colour(driver.constructor) }}">{{ driver.constructor }}</p>
+    <p class="race-date mono">{{ driver.nationality }} · #{{ driver.driver_code }} · P{{ driver.position }} in Championship · {{ driver.points | int }} PTS</p>
+</div>
+
+<!-- Stats Grid -->
+<section class="card card-accent" id="driver-stats-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">📊</span> {{ season }} Season Stats</h2>
+        <a href="/compare?d1={{ driver.driver_code }}" class="card-link">Compare ⚔️</a>
+    </div>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.wins }}</span>
+            <span class="stat-label">Wins</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.podiums }}</span>
+            <span class="stat-label">Podiums</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.top5 }}</span>
+            <span class="stat-label">Top 5</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.top10 }}</span>
+            <span class="stat-label">Top 10</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.avg_finish }}</span>
+            <span class="stat-label">Avg Finish</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.best_finish }}</span>
+            <span class="stat-label">Best Finish</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.dnfs }}</span>
+            <span class="stat-label">DNFs</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value mono">{{ stats.races }}</span>
+            <span class="stat-label">Races</span>
+        </div>
+    </div>
+</section>
+
+<!-- Points Progression Chart -->
+{% if points_history %}
+<section class="card" id="points-progression-section">
+    <div class="card-header">
+        <h2 class="card-title">📈 Points Progression</h2>
+    </div>
+    <div class="chart-container">
+        <canvas id="pointsProgressionChart" height="250"></canvas>
+    </div>
+</section>
+{% endif %}
+
+<!-- Race-by-Race Results -->
+{% if race_results %}
+<section class="card" id="driver-results-section">
+    <div class="card-header">
+        <h2 class="card-title">🏁 Race-by-Race Results</h2>
+    </div>
+    <div class="table-wrapper">
+        <table class="data-table" id="driver-results-table">
+            <thead>
+                <tr>
+                    <th>Round</th>
+                    <th>Race</th>
+                    <th>Grid</th>
+                    <th>Finish</th>
+                    <th>+/-</th>
+                    <th>Points</th>
+                    <th>Cumulative</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rr in race_results %}
+                <tr class="result-row" style="--delay: {{ loop.index * 0.03 }}s">
+                    <td class="mono">R{{ rr.race.round }}</td>
+                    <td>
+                        <a href="/race/{{ season }}/{{ rr.race.round }}" class="race-link">
+                            {{ get_flag(rr.race.country) }} {{ rr.race.race_name }}
+                        </a>
+                    </td>
+                    <td class="mono">{% if rr.result.grid == 0 %}PIT{% else %}{{ rr.result.grid }}{% endif %}</td>
+                    <td>
+                        <span class="position-badge {% if rr.result.position == 1 %}gold{% elif rr.result.position == 2 %}silver{% elif rr.result.position == 3 %}bronze{% endif %}">
+                            {{ rr.result.position }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if rr.result.grid == 0 %}
+                        <span class="position-gain neutral">PIT</span>
+                        {% else %}
+                        {% set gain = rr.result.grid - rr.result.position %}
+                        {% if gain > 0 %}
+                        <span class="position-gain positive">▲{{ gain }}</span>
+                        {% elif gain < 0 %}
+                        <span class="position-gain negative">▼{{ gain | abs }}</span>
+                        {% else %}
+                        <span class="position-gain neutral">—</span>
+                        {% endif %}
+                        {% endif %}
+                    </td>
+                    <td class="mono points-cell">{{ rr.result.points | int }}</td>
+                    <td class="mono">{{ rr.cumulative_points | int }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+{% else %}
+<section class="card empty-card">
+    <div class="empty-state">
+        <span class="empty-icon">🏎️</span>
+        <h3>Driver not found</h3>
+        <p>Check the driver code and try again.</p>
+    </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if points_history %}
+<script>
+    const pointsData = {
+        labels: [{% for p in points_history %}"R{{ p.round }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+        points: [{% for p in points_history %}{{ p.points }}{% if not loop.last %}, {% endif %}{% endfor %}],
+    };
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const canvas = document.getElementById('pointsProgressionChart');
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: pointsData.labels,
+                datasets: [{
+                    label: 'Cumulative Points',
+                    data: pointsData.points,
+                    borderColor: '{{ get_team_colour(driver.constructor) }}',
+                    backgroundColor: '{{ get_team_colour(driver.constructor) }}22',
+                    borderWidth: 2.5,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    pointBackgroundColor: '{{ get_team_colour(driver.constructor) }}',
+                    tension: 0.3,
+                    fill: true,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                        borderColor: 'rgba(255, 255, 255, 0.1)',
+                        borderWidth: 1,
+                        cornerRadius: 8,
+                        padding: 12,
+                    },
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                        ticks: { font: { family: "'JetBrains Mono', monospace", size: 10 } },
+                    },
+                    y: {
+                        title: { display: true, text: 'Points', font: { weight: '600' } },
+                        grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                        ticks: { font: { family: "'JetBrains Mono', monospace", size: 10 } },
+                    },
+                },
+                animation: { duration: 1500, easing: 'easeOutQuart' },
+            },
+        });
+    });
+</script>
+{% endif %}
+{% endblock %}

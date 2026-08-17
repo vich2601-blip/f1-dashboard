@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+
+{% block title %}{{ race_info.race_name if race_info else 'Race' }} — {{ season }} Results{% endblock %}
+{% block meta_description %}Full results, qualifying times, lap charts, sector analysis, and pit stop data for the {{ race_info.race_name
+if race_info else 'race' }}.{% endblock %}
+{% block head_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="page-header race-header">
+    {% if race_info %}
+    <div class="race-header-top">
+        <a href="/calendar" class="back-link" id="back-to-calendar">← Calendar</a>
+        <span class="race-round-badge mono">Round {{ round_num }}</span>
+    </div>
+    <h1 class="page-title">
+        <span class="hero-flag" style="display:inline; font-size:1.8rem;">{{ get_flag(race_info.country) }}</span>
+        {{ race_info.race_name }}
+    </h1>
+    <p class="page-subtitle">{{ race_info.circuit_name }} — {{ race_info.locality }}, {{ race_info.country }}</p>
+    <p class="race-date mono">{{ race_info.date }}</p>
+    {% else %}
+    <h1 class="page-title">Race {{ round_num }}</h1>
+    {% endif %}
+</div>
+
+{% if results %}
+<!-- Podium Highlight -->
+<section class="podium-section" id="podium-section">
+    <div class="podium">
+        {% if results | length >= 3 %}
+        <!-- P2 -->
+        <div class="podium-place podium-2" id="podium-p2">
+            <div class="podium-driver">
+                <div class="team-colour-dot" style="background: {{ get_team_colour(results[1].constructor) }}"></div>
+                <span class="podium-code mono">{{ results[1].driver_code }}</span>
+                <span class="podium-name">{{ results[1].driver_name }}</span>
+                <span class="podium-team" style="color: {{ get_team_colour(results[1].constructor) }}">{{
+                    results[1].constructor }}</span>
+                <span class="podium-time mono">{{ results[1].time_text }}</span>
+            </div>
+            <div class="podium-block silver">2</div>
+        </div>
+        <!-- P1 -->
+        <div class="podium-place podium-1" id="podium-p1">
+            <div class="podium-driver">
+                <div class="team-colour-dot" style="background: {{ get_team_colour(results[0].constructor) }}"></div>
+                <span class="podium-code mono">{{ results[0].driver_code }}</span>
+                <span class="podium-name">{{ results[0].driver_name }}</span>
+                <span class="podium-team" style="color: {{ get_team_colour(results[0].constructor) }}">{{
+                    results[0].constructor }}</span>
+                <span class="podium-time mono">{{ results[0].time_text }}</span>
+            </div>
+            <div class="podium-block gold">1</div>
+        </div>
+        <!-- P3 -->
+        <div class="podium-place podium-3" id="podium-p3">
+            <div class="podium-driver">
+                <div class="team-colour-dot" style="background: {{ get_team_colour(results[2].constructor) }}"></div>
+                <span class="podium-code mono">{{ results[2].driver_code }}</span>
+                <span class="podium-name">{{ results[2].driver_name }}</span>
+                <span class="podium-team" style="color: {{ get_team_colour(results[2].constructor) }}">{{
+                    results[2].constructor }}</span>
+                <span class="podium-time mono">{{ results[2].time_text }}</span>
+            </div>
+            <div class="podium-block bronze">3</div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<!-- Results Table -->
+<section class="card card-accent" id="results-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">🏁</span> Race Results</h2>
+    </div>
+    <div class="table-wrapper">
+        <table class="data-table" id="results-table">
+            <thead>
+                <tr>
+                    <th>Pos</th>
+                    <th>Driver</th>
+                    <th>Team</th>
+                    <th>Grid</th>
+                    <th>Laps</th>
+                    <th>Time/Status</th>
+                    <th>Points</th>
+                    <th>+/-</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in results %}
+                <tr class="result-row" style="--delay: {{ loop.index * 0.03 }}s">
+                    <td>
+                        <span
+                            class="position-badge {% if r.position == 1 %}gold{% elif r.position == 2 %}silver{% elif r.position == 3 %}bronze{% endif %}">
+                            {{ r.position }}
+                        </span>
+                    </td>
+                    <td>
+                        <a href="/driver/{{ r.driver_code }}" class="driver-cell" style="text-decoration: none; color: inherit;">
+                            <div class="team-colour-bar-sm" style="background: {{ get_team_colour(r.constructor) }}">
+                            </div>
+                            <div>
+                                <span class="driver-code mono">{{ r.driver_code }}</span>
+                                <span class="driver-fullname">{{ r.driver_name }}</span>
+                                {% if r.fastest_lap_rank == 1 %}
+                                <span class="fastest-lap-badge" title="Fastest Lap">⏱️</span>
+                                {% endif %}
+                            </div>
+                        </a>
+                    </td>
+                    <td><span class="team-label" style="color: {{ get_team_colour(r.constructor) }}">{{ r.constructor
+                            }}</span></td>
+                    <td class="mono">{% if r.grid == 0 %}PIT{% else %}{{ r.grid }}{% endif %}</td>
+                    <td class="mono">{{ r.laps }}</td>
+                    <td class="mono">{{ r.time_text }}</td>
+                    <td class="mono points-cell">{{ r.points | int }}</td>
+                    <td>
+                        {% if r.grid == 0 %}
+                        <span class="position-gain neutral">PIT</span>
+                        {% else %}
+                        {% set gain = r.grid - r.position %}
+                        {% if gain > 0 %}
+                        <span class="position-gain positive">▲{{ gain }}</span>
+                        {% elif gain < 0 %}
+                        <span class="position-gain negative">▼{{ gain | abs }}</span>
+                        {% else %}
+                        <span class="position-gain neutral">—</span>
+                        {% endif %}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% else %}
+<section class="card empty-card">
+    <div class="empty-state">
+        <span class="empty-icon">🏎️</span>
+        <h3>No results yet</h3>
+        <p>Race results will appear here after the race is completed.</p>
+    </div>
+</section>
+{% endif %}
+
+<!-- Sector Analysis -->
+{% if sector_data %}
+<section class="card card-accent" id="sector-analysis-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">⏱️</span> Sector Analysis</h2>
+    </div>
+
+    <!-- Controls -->
+    <div class="sector-controls">
+        <label for="sector-lap-select">Lap</label>
+        <select id="sector-lap-select" class="sector-select" onchange="updateSectorTable(this.value)">
+            {% for lap_num in range(1, sector_data.max_lap + 1) %}
+            {% if lap_num in sector_data.laps_by_number %}
+            <option value="{{ lap_num }}" {% if lap_num == 1 %}selected{% endif %}>Lap {{ lap_num }}</option>
+            {% endif %}
+            {% endfor %}
+        </select>
+
+        <div class="sector-legend">
+            <span class="sector-legend-item">
+                <span class="sector-legend-dot purple"></span> Session Best
+            </span>
+            <span class="sector-legend-item">
+                <span class="sector-legend-dot green"></span> Personal Best
+            </span>
+            <span class="sector-legend-item">
+                <span class="sector-legend-dot yellow"></span> Slower
+            </span>
+        </div>
+    </div>
+
+    <!-- Session Bests Summary -->
+    <div style="padding: 0 var(--space-md); margin-bottom: var(--space-md);">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th colspan="2">Session Best</th>
+                    <th>S1</th>
+                    <th>S2</th>
+                    <th>S3</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="sector-best-row">
+                    <td colspan="2" class="mono" style="font-weight:700; color: #c77dff;">⚡ Overall Best</td>
+                    <td><span class="sector-time sector-purple">{{ "%.3f"|format(sector_data.session_bests.s1) }}</span></td>
+                    <td><span class="sector-time sector-purple">{{ "%.3f"|format(sector_data.session_bests.s2) }}</span></td>
+                    <td><span class="sector-time sector-purple">{{ "%.3f"|format(sector_data.session_bests.s3) }}</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Lap Sector Table -->
+    <div class="table-wrapper" id="sector-table-wrapper">
+        <table class="data-table" id="sector-table">
+            <thead>
+                <tr>
+                    <th>Driver</th>
+                    <th>S1</th>
+                    <th>S2</th>
+                    <th>S3</th>
+                    <th>Lap Time</th>
+                </tr>
+            </thead>
+            <tbody id="sector-table-body">
+                <!-- Populated by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+<!-- Qualifying -->
+{% if qualifying %}
+<section class="card" id="qualifying-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">⏱️</span> Qualifying</h2>
+    </div>
+    <div class="table-wrapper">
+        <table class="data-table" id="qualifying-table">
+            <thead>
+                <tr>
+                    <th>Pos</th>
+                    <th>Driver</th>
+                    <th>Team</th>
+                    <th>Q1</th>
+                    <th>Q2</th>
+                    <th>Q3</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q in qualifying %}
+                <tr class="result-row" style="--delay: {{ loop.index * 0.03 }}s">
+                    <td><span class="position-badge {% if q.position == 1 %}gold{% endif %}">{{ q.position }}</span>
+                    </td>
+                    <td>
+                        <div class="driver-cell">
+                            <div class="team-colour-bar-sm" style="background: {{ get_team_colour(q.constructor) }}">
+                            </div>
+                            <span class="driver-code mono">{{ q.driver_code }}</span>
+                        </div>
+                    </td>
+                    <td><span class="team-label" style="color: {{ get_team_colour(q.constructor) }}">{{ q.constructor
+                            }}</span></td>
+                    <td class="mono">{{ q.q1 or '—' }}</td>
+                    <td class="mono">{{ q.q2 or '—' }}</td>
+                    <td class="mono">{{ q.q3 or '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+<!-- Lap Time Chart -->
+{% if lap_times %}
+<section class="card" id="lap-chart-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">📊</span> Lap Times — Top 5</h2>
+    </div>
+    <div class="chart-container">
+        <canvas id="lapTimeChart" height="300"></canvas>
+    </div>
+</section>
+{% endif %}
+
+<!-- Position Change Chart -->
+{% if position_data %}
+<section class="card" id="position-chart-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">📈</span> Position Changes</h2>
+    </div>
+    <div class="chart-container">
+        <canvas id="positionChart" height="350"></canvas>
+    </div>
+</section>
+{% endif %}
+
+<!-- Tyre Strategy Timeline -->
+{% if stint_data %}
+<section class="card" id="tyre-strategy-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">🛞</span> Tyre Strategy</h2>
+    </div>
+    <div id="tyre-timeline" class="tyre-timeline-container"></div>
+</section>
+{% endif %}
+
+<!-- Pit Stops -->
+{% if pit_stops %}
+<section class="card" id="pitstops-section">
+    <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">🔧</span> Pit Stops</h2>
+    </div>
+    <div class="table-wrapper">
+        <table class="data-table" id="pitstops-table">
+            <thead>
+                <tr>
+                    <th>Driver</th>
+                    <th>Stop</th>
+                    <th>Lap</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ps in pit_stops %}
+                <tr class="result-row">
+                    <td class="mono">{{ ps.driver_code }}</td>
+                    <td class="mono">{{ ps.stop }}</td>
+                    <td class="mono">{{ ps.lap }}</td>
+                    <td class="mono">{{ ps.duration }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if lap_times or position_data or stint_data or sector_data %}
+<script>
+    {% if sector_data %}
+    // Sector analysis data
+    const sectorData = {{ sector_data.laps_by_number | tojson }};
+    const sectorSessionBests = {{ sector_data.session_bests | tojson }};
+
+    function updateSectorTable(lapNum) {
+        const tbody = document.getElementById('sector-table-body');
+        if (!tbody) return;
+
+        const lapEntries = sectorData[lapNum] || sectorData[String(lapNum)];
+        if (!lapEntries || lapEntries.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--text-muted); padding: var(--space-lg);">No sector data for this lap</td></tr>';
+            return;
+        }
+
+        // Sort by lap_time (fastest first)
+        const sorted = [...lapEntries].sort((a, b) => (a.lap_time || 999) - (b.lap_time || 999));
+
+        let html = '';
+        sorted.forEach(function(entry) {
+            html += '<tr class="result-row">';
+            html += '<td><div class="driver-cell">';
+            html += '<div class="team-colour-bar-sm" style="background: #' + entry.team_colour + '"></div>';
+            html += '<span class="driver-code mono">' + entry.acronym + '</span>';
+            html += '</div></td>';
+            html += '<td><span class="sector-time sector-' + entry.s1_class + '">' + entry.s1.toFixed(3) + '</span></td>';
+            html += '<td><span class="sector-time sector-' + entry.s2_class + '">' + entry.s2.toFixed(3) + '</span></td>';
+            html += '<td><span class="sector-time sector-' + entry.s3_class + '">' + entry.s3.toFixed(3) + '</span></td>';
+            html += '<td class="mono">' + (entry.lap_time ? entry.lap_time.toFixed(3) : '—') + '</td>';
+            html += '</tr>';
+        });
+
+        tbody.innerHTML = html;
+    }
+
+    // Initialize with first lap
+    document.addEventListener('DOMContentLoaded', function() {
+        const select = document.getElementById('sector-lap-select');
+        if (select) updateSectorTable(select.value);
+    });
+    {% endif %}
+
+    {% if lap_times %}
+    // Lap time chart data
+    const lapTimeData = {
+        {% for driver_data in lap_times %}
+    "{{ driver_data.driver_code }}": {
+        colour: "{{ get_team_colour(driver_data.constructor) }}",
+            laps: [
+                {% for lap in driver_data.laps %}
+    { lap: {{ lap.lap }}, time: "{{ lap.time }}" },
+    {% endfor %}
+            ]
+        },
+    {% endfor %}
+    };
+    {% endif %}
+
+    {% if position_data %}
+    // Position change chart data
+    const positionData = {
+        {% for driver_data in position_data %}
+        "{{ driver_data.driver_code }}": {
+            colour: "{{ get_team_colour(driver_data.constructor) }}",
+            positions: [
+                {% for p in driver_data.positions %}
+                { lap: {{ p.lap }}, position: {{ p.position }} },
+                {% endfor %}
+            ]
+        },
+        {% endfor %}
+    };
+    {% endif %}
+
+    {% if stint_data %}
+    // Tyre strategy data
+    const stintData = {
+        {% for driver_data in stint_data %}
+        "{{ driver_data.driver_code }}": {
+            colour: "{{ get_team_colour(driver_data.constructor) }}",
+            stints: [
+                {% for s in driver_data.stints %}
+                { start: {{ s.start }}, end: {{ s.end }}, compound: "{{ s.compound }}" },
+                {% endfor %}
+            ]
+        },
+        {% endfor %}
+    };
+    {% endif %}
+
+    // Initialize charts after DOM loads
+    document.addEventListener('DOMContentLoaded', function () {
+        {% if lap_times %}initLapTimeChart(lapTimeData);{% endif %}
+        {% if position_data %}initPositionChart(positionData);{% endif %}
+        {% if stint_data %}initTyreTimeline(stintData, {{ total_laps }});{% endif %}
+    });
+</script>
+{% endif %}
+{% endblock %}

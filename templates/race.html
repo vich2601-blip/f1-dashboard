@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}{{ race_info.race_name if race_info else 'Race' }} — {{ season }} Results{% endblock %}
+{% block topbar_label %}Race report{% endblock %}
 {% block meta_description %}Full results, qualifying times, lap charts, sector analysis, and pit stop data for the {{ race_info.race_name
 if race_info else 'race' }}.{% endblock %}
 {% block head_scripts %}
@@ -10,7 +11,7 @@ if race_info else 'race' }}.{% endblock %}
 <div class="page-header race-header">
     {% if race_info %}
     <div class="race-header-top">
-        <a href="/calendar" class="back-link" id="back-to-calendar">← Calendar</a>
+        <a href="/calendar" class="back-link" id="back-to-calendar">Calendar</a>
         <span class="race-round-badge mono">Round {{ round_num }}</span>
     </div>
     <h1 class="page-title">
@@ -72,7 +73,7 @@ if race_info else 'race' }}.{% endblock %}
 <!-- Results Table -->
 <section class="card card-accent" id="results-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">🏁</span> Race Results</h2>
+        <h2 class="card-title">Race results</h2>
     </div>
     <div class="table-wrapper">
         <table class="data-table" id="results-table">
@@ -150,7 +151,7 @@ if race_info else 'race' }}.{% endblock %}
 {% if sector_data %}
 <section class="card card-accent" id="sector-analysis-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">⏱️</span> Sector Analysis</h2>
+        <h2 class="card-title">Sector analysis</h2>
     </div>
 
     <!-- Controls -->
@@ -223,7 +224,7 @@ if race_info else 'race' }}.{% endblock %}
 {% if qualifying %}
 <section class="card" id="qualifying-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">⏱️</span> Qualifying</h2>
+        <h2 class="card-title">Qualifying</h2>
     </div>
     <div class="table-wrapper">
         <table class="data-table" id="qualifying-table">
@@ -266,7 +267,7 @@ if race_info else 'race' }}.{% endblock %}
 {% if lap_times %}
 <section class="card" id="lap-chart-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">📊</span> Lap Times — Top 5</h2>
+        <h2 class="card-title">Lap times — top 5</h2>
     </div>
     <div class="chart-container">
         <canvas id="lapTimeChart" height="300"></canvas>
@@ -278,7 +279,7 @@ if race_info else 'race' }}.{% endblock %}
 {% if position_data %}
 <section class="card" id="position-chart-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">📈</span> Position Changes</h2>
+        <h2 class="card-title">Position changes</h2>
     </div>
     <div class="chart-container">
         <canvas id="positionChart" height="350"></canvas>
@@ -290,9 +291,74 @@ if race_info else 'race' }}.{% endblock %}
 {% if stint_data %}
 <section class="card" id="tyre-strategy-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">🛞</span> Tyre Strategy</h2>
+        <h2 class="card-title">Tyre strategy</h2>
     </div>
     <div id="tyre-timeline" class="tyre-timeline-container"></div>
+
+</section>
+{% endif %}
+
+<!-- Telemetry Explorer -->
+{% if session_key %}
+<section class="card card-accent" id="telemetry-explorer-section">
+    <div class="card-header">
+        <h2 class="card-title">Telemetry explorer</h2>
+    </div>
+    
+    <div class="telemetry-controls" style="display: flex; gap: var(--space-md); flex-wrap: wrap; padding: var(--space-md); background: var(--bg-surface); border-radius: var(--radius-md); margin-bottom: var(--space-md);">
+        <div class="picker-group">
+            <label class="picker-label">Driver 1</label>
+            <select id="telemetry-d1" class="picker-select" style="min-width: 140px;">
+                {% for r in results %}
+                <option value="{{ r.driver_number }}" {% if loop.index == 1 %}selected{% endif %}>
+                    {{ r.driver_code }} — {{ r.driver_name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="picker-group">
+            <label class="picker-label">Driver 2</label>
+            <select id="telemetry-d2" class="picker-select" style="min-width: 140px;">
+                {% for r in results %}
+                <option value="{{ r.driver_number }}" {% if loop.index == 2 %}selected{% endif %}>
+                    {{ r.driver_code }} — {{ r.driver_name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="picker-group">
+            <label class="picker-label">Lap</label>
+            <select id="telemetry-lap" class="picker-select" style="min-width: 90px;">
+                {% for l in range(1, total_laps + 1) %}
+                <option value="{{ l }}" {% if l == 5 %}selected{% endif %}>Lap {{ l }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button id="btn-compare-telemetry" class="compare-btn" style="margin-top: 25px; align-self: flex-start; height: 38px; padding: 0 var(--space-lg); border-radius: var(--radius-md); background: var(--accent-gradient); border: none; color: #fff; font-weight: 600; cursor: pointer; transition: transform 0.2s;">Load Telemetry</button>
+    </div>
+
+    <!-- Loading / Empty states -->
+    <div id="telemetry-loading-state" style="display: none; text-align: center; padding: var(--space-xl);">
+        <span class="live-indicator" style="display: inline-flex; margin: 0 auto var(--space-md) auto;">
+            <span class="live-dot-lg" style="margin-right: 8px;"></span>
+            Fetching telemetry from OpenF1...
+        </span>
+    </div>
+
+    <div id="telemetry-empty-state" style="text-align: center; padding: var(--space-xl); color: var(--text-secondary);">
+        <span style="font-size: 2.5rem; display: block; margin-bottom: var(--space-md);">🏎️</span>
+        <p>Select two drivers and a lap, then click <strong>Load Telemetry</strong> to compare speed profiles and pedal inputs.</p>
+    </div>
+
+    <!-- Telemetry Charts -->
+    <div id="telemetry-charts-container" style="display: none; flex-direction: column; gap: var(--space-md);">
+        <div class="chart-container" style="height: 300px; position: relative;">
+            <canvas id="telemetrySpeedChart"></canvas>
+        </div>
+        <div class="chart-container" style="height: 250px; position: relative;">
+            <canvas id="telemetryPedalChart"></canvas>
+        </div>
+    </div>
 </section>
 {% endif %}
 
@@ -300,7 +366,7 @@ if race_info else 'race' }}.{% endblock %}
 {% if pit_stops %}
 <section class="card" id="pitstops-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">🔧</span> Pit Stops</h2>
+        <h2 class="card-title">Pit stops</h2>
     </div>
     <div class="table-wrapper">
         <table class="data-table" id="pitstops-table">
@@ -428,6 +494,181 @@ if race_info else 'race' }}.{% endblock %}
         {% if position_data %}initPositionChart(positionData);{% endif %}
         {% if stint_data %}initTyreTimeline(stintData, {{ total_laps }});{% endif %}
     });
+
+    {% if session_key %}
+    // Telemetry Explorer logic
+    let speedChartInstance = null;
+    let pedalChartInstance = null;
+
+    document.getElementById('btn-compare-telemetry').addEventListener('click', function() {
+        const d1 = document.getElementById('telemetry-d1').value;
+        const d2 = document.getElementById('telemetry-d2').value;
+        const lap = document.getElementById('telemetry-lap').value;
+
+        const loading = document.getElementById('telemetry-loading-state');
+        const empty = document.getElementById('telemetry-empty-state');
+        const charts = document.getElementById('telemetry-charts-container');
+
+        loading.style.display = 'block';
+        empty.style.display = 'none';
+        charts.style.display = 'none';
+
+        fetch(`/api/telemetry/{{ session_key }}?d1=${d1}&d2=${d2}&lap=${lap}`)
+            .then(res => res.json())
+            .then(data => {
+                loading.style.display = 'none';
+
+                const t1 = data.d1.telemetry || [];
+                const t2 = data.d2.telemetry || [];
+
+                if (t1.length === 0 && t2.length === 0) {
+                    empty.style.display = 'block';
+                    empty.innerHTML = '⚠️ <p>No telemetry data returned from OpenF1 for this lap. Make sure the API is online and the session key is valid.</p>';
+                    return;
+                }
+
+                charts.style.display = 'flex';
+
+                // Speed Trace Chart
+                const speedCtx = document.getElementById('telemetrySpeedChart');
+                if (speedChartInstance) speedChartInstance.destroy();
+
+                const maxLen = Math.max(t1.length, t2.length);
+                const labels = Array.from({length: maxLen}, (_, i) => i + 1);
+
+                const d1Code = document.getElementById('telemetry-d1').options[document.getElementById('telemetry-d1').selectedIndex].text.split(' — ')[0].trim();
+                const d2Code = document.getElementById('telemetry-d2').options[document.getElementById('telemetry-d2').selectedIndex].text.split(' — ')[0].trim();
+
+                const d1Color = getDriverColorByCode(d1Code);
+                const d2Color = getDriverColorByCode(d2Code);
+
+                speedChartInstance = new Chart(speedCtx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: d1Code + ' Speed (km/h)',
+                                data: t1.map(d => d.speed),
+                                borderColor: d1Color,
+                                backgroundColor: d1Color + '11',
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                fill: false
+                            },
+                            {
+                                label: d2Code + ' Speed (km/h)',
+                                data: t2.map(d => d.speed),
+                                borderColor: d2Color,
+                                backgroundColor: d2Color + '11',
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { labels: { font: { family: "'JetBrains Mono', monospace", size: 11 } } },
+                            title: { display: true, text: 'Speed Trace Comparison', font: { size: 12, weight: '700' } }
+                        },
+                        scales: {
+                            x: { title: { display: true, text: 'Lap Sample Point' }, grid: { display: false } },
+                            y: { title: { display: true, text: 'Speed (km/h)' }, min: 50, max: 350 }
+                        }
+                    }
+                });
+
+                // Pedal Trace Chart
+                const pedalCtx = document.getElementById('telemetryPedalChart');
+                if (pedalChartInstance) pedalChartInstance.destroy();
+
+                pedalChartInstance = new Chart(pedalCtx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: d1Code + ' Throttle (%)',
+                                data: t1.map(d => d.throttle),
+                                borderColor: d1Color,
+                                borderDash: [5, 5],
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                fill: false
+                            },
+                            {
+                                label: d1Code + ' Brake',
+                                data: t1.map(d => d.brake * 100),
+                                borderColor: '#ef4444',
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                fill: false
+                            },
+                            {
+                                label: d2Code + ' Throttle (%)',
+                                data: t2.map(d => d.throttle),
+                                borderColor: d2Color,
+                                borderDash: [5, 5],
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                fill: false
+                            },
+                            {
+                                label: d2Code + ' Brake',
+                                data: t2.map(d => d.brake * 100),
+                                borderColor: '#eab308',
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { labels: { font: { family: "'JetBrains Mono', monospace", size: 10 } } },
+                            title: { display: true, text: 'Throttle & Brake Inputs', font: { size: 12, weight: '700' } }
+                        },
+                        scales: {
+                            x: { grid: { display: false } },
+                            y: { title: { display: true, text: 'Input Value (%)' }, min: 0, max: 105 }
+                        }
+                    }
+                });
+            })
+            .catch(err => {
+                loading.style.display = 'none';
+                empty.style.display = 'block';
+                empty.innerHTML = '⚠️ <p>An error occurred while loading telemetry: ' + err.message + '</p>';
+            });
+    });
+
+    function getDriverColorByCode(code) {
+        const teamColors = {
+            'VER': '#3671C6', 'PER': '#3671C6',
+            'HAM': '#27F4D2', 'RUS': '#27F4D2',
+            'LEC': '#E8002D', 'SAI': '#E8002D',
+            'NOR': '#FF8000', 'PIA': '#FF8000',
+            'ALO': '#229971', 'STR': '#229971',
+            'GAS': '#FF87BC', 'OCO': '#FF87BC',
+            'ALB': '#64C4FF', 'SAR': '#64C4FF',
+            'RIC': '#6692FF', 'TSU': '#6692FF',
+            'BOT': '#52E252', 'ZHO': '#52E252',
+            'MAG': '#B6BABD', 'HUL': '#B6BABD'
+        };
+        return teamColors[code] || '#888888';
+    }
+    {% endif %}
 </script>
 {% endif %}
 {% endblock %}

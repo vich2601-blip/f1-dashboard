@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 
-{% block title %}{{ season }} Driver Comparison{% endblock %}
+{% block title %}{{ season }} Driver Comparison — Apex{% endblock %}
 {% block meta_description %}Head-to-head Formula 1 driver comparison for the {{ season }} season.{% endblock %}
+{% block topbar_label %}Compare{% endblock %}
 
 {% block head_scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -9,14 +10,15 @@
 
 {% block content %}
 <div class="page-header">
-    <h1 class="page-title">Head-to-Head Comparison</h1>
-    <p class="page-subtitle">{{ season }} Season</p>
+    <p class="eyebrow">{{ season }} season</p>
+    <h1 class="page-title">Head-to-head</h1>
+    <p class="page-subtitle">Race and qualifying scorelines, form, and points climb.</p>
 </div>
 
 <!-- Driver Picker -->
 <section class="card card-accent" id="compare-picker-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">⚔️</span> Select Drivers</h2>
+        <h2 class="card-title">Select drivers</h2>
     </div>
     <form class="compare-form" action="/compare" method="get">
         <div class="compare-selects">
@@ -86,7 +88,7 @@
 <!-- Stats Comparison -->
 <section class="card" id="stats-comparison-section">
     <div class="card-header">
-        <h2 class="card-title">📊 Stats Comparison</h2>
+        <h2 class="card-title">Season stats</h2>
     </div>
     <div class="compare-stats-grid">
         {% set stats = [
@@ -116,16 +118,28 @@
         </div>
     </div>
 </section>
+<!-- Comparison Charts -->
+<div class="dashboard-grid" style="grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: var(--space-md); margin-top: var(--space-md);">
+    <!-- Summary Bar Chart -->
+    <section class="card" id="comparison-chart-section">
+        <div class="card-header">
+            <h2 class="card-title">Visual summary</h2>
+        </div>
+        <div class="chart-container" style="height: 300px;">
+            <canvas id="comparisonChart"></canvas>
+        </div>
+    </section>
 
-<!-- Comparison Chart -->
-<section class="card" id="comparison-chart-section">
-    <div class="card-header">
-        <h2 class="card-title">📊 Visual Comparison</h2>
-    </div>
-    <div class="chart-container">
-        <canvas id="comparisonChart" height="300"></canvas>
-    </div>
-</section>
+    <!-- Points Progression Line Chart -->
+    <section class="card" id="points-progression-chart-section">
+        <div class="card-header">
+            <h2 class="card-title">Points climb</h2>
+        </div>
+        <div class="chart-container" style="height: 300px;">
+            <canvas id="pointsProgressionChart"></canvas>
+        </div>
+    </section>
+</div>
 {% endif %}
 
 {% endblock %}
@@ -148,7 +162,75 @@
     };
 
     document.addEventListener('DOMContentLoaded', function() {
+        // Init bar comparison
         initComparisonChart('comparisonChart', comparisonData);
+
+        // Init points line chart
+        const progressionCtx = document.getElementById('pointsProgressionChart');
+        if (progressionCtx) {
+            new Chart(progressionCtx, {
+                type: 'line',
+                data: {
+                    labels: {{ progression_data.labels | tojson }},
+                    datasets: [
+                        {
+                            label: '{{ d1.info.driver_code }}',
+                            data: {{ progression_data.d1_values | tojson }},
+                            borderColor: '{{ get_team_colour(d1.info.constructor) }}',
+                            backgroundColor: '{{ get_team_colour(d1.info.constructor) }}22',
+                            borderWidth: 2.5,
+                            pointRadius: 4,
+                            pointHoverRadius: 7,
+                            tension: 0.15,
+                            fill: true
+                        },
+                        {
+                            label: '{{ d2.info.driver_code }}',
+                            data: {{ progression_data.d2_values | tojson }},
+                            borderColor: '{{ get_team_colour(d2.info.constructor) }}',
+                            backgroundColor: '{{ get_team_colour(d2.info.constructor) }}22',
+                            borderWidth: 2.5,
+                            pointRadius: 4,
+                            pointHoverRadius: 7,
+                            tension: 0.15,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                font: { family: "'JetBrains Mono', monospace", size: 11, weight: '600' },
+                                usePointStyle: true
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(31, 31, 39, 0.95)',
+                            borderColor: 'rgba(255, 255, 255, 0.1)',
+                            borderWidth: 1,
+                            cornerRadius: 8,
+                            padding: 12,
+                            titleFont: { family: "'Inter', sans-serif", weight: '600' },
+                            bodyFont: { family: "'JetBrains Mono', monospace" }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { font: { family: "'JetBrains Mono', monospace", size: 9 } }
+                        },
+                        y: {
+                            title: { display: true, text: 'Championship Points', font: { weight: '600' } },
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { font: { family: "'JetBrains Mono', monospace", size: 10 } }
+                        }
+                    }
+                }
+            });
+        }
     });
 </script>
 {% endif %}

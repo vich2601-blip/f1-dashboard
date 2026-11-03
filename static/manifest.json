@@ -1,0 +1,17 @@
+{
+  "name": "Apex GP Control",
+  "short_name": "Apex",
+  "description": "Grand Prix control room with live timing, standings, and race predictions.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050607",
+  "theme_color": "#050607",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%23050607'/%3E%3Cpath d='M36 140 L84 44 H108 L60 140 Z' fill='%23ff2d2d'/%3E%3Cpath d='M96 140 L144 44 H168 L120 140 Z' fill='%23f4f1ea'/%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,2 +1,14 @@
 flask
 requests
+flask-socketio
+eventlet
+fastf1
+scikit-learn
+joblib
+pandas
+numpy
+xgboost
+lightgbm
+catboost
+shap
+optuna

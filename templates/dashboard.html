@@ -1,83 +1,102 @@
 {% extends "base.html" %}
 
-{% block title %}F1 Dashboard — Live Standings & Race Results{% endblock %}
+{% block title %}Apex — {{ season }} Grand Prix Control{% endblock %}
 {% block meta_description %}Live Formula 1 dashboard with championship standings, next race countdown, and recent race results.{% endblock %}
+{% block topbar_label %}Overview{% endblock %}
 
 {% block content %}
 <div class="dashboard">
-
-    <!-- Hero: Next Race Countdown -->
-    {% if next_race %}
-    <section class="hero-section" id="next-race-hero">
-        <div class="hero-badge">NEXT RACE</div>
-        <h1 class="hero-title">
-            <span class="hero-flag">{{ get_flag(next_race.country) }}</span>
-            {{ next_race.race_name }}
-        </h1>
-        <p class="hero-circuit">{{ next_race.circuit_name }} — {{ next_race.locality }}, {{ next_race.country }}</p>
-        <div class="countdown" id="countdown" data-target="{{ next_race.datetime }}">
-            <div class="countdown-item">
-                <span class="countdown-value" id="countdown-days">--</span>
-                <span class="countdown-label">Days</span>
+    <div class="home-grid">
+        {% if next_race %}
+        <section class="hero-section" id="next-race-hero">
+            <div class="hero-meta">
+                <div class="hero-badge">Lights out in</div>
+                {% if next_race.has_sprint %}
+                <span class="badge badge-sprint">Sprint weekend</span>
+                {% endif %}
             </div>
-            <div class="countdown-item">
-                <span class="countdown-value" id="countdown-hours">--</span>
-                <span class="countdown-label">Hours</span>
+            <h1 class="hero-title">
+                <span class="hero-flag">{{ get_flag(next_race.country) }}</span>
+                {{ next_race.race_name }}
+            </h1>
+            <p class="hero-circuit">{{ next_race.circuit_name }} · {{ next_race.locality }}, {{ next_race.country }}</p>
+            <div class="countdown" id="countdown" data-target="{{ next_race.datetime }}">
+                <div class="countdown-item">
+                    <span class="countdown-value" id="countdown-days">--</span>
+                    <span class="countdown-label">Days</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="countdown-value" id="countdown-hours">--</span>
+                    <span class="countdown-label">Hours</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="countdown-value" id="countdown-minutes">--</span>
+                    <span class="countdown-label">Mins</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="countdown-value" id="countdown-seconds">--</span>
+                    <span class="countdown-label">Secs</span>
+                </div>
             </div>
-            <div class="countdown-item">
-                <span class="countdown-value" id="countdown-minutes">--</span>
-                <span class="countdown-label">Mins</span>
+            <div class="hero-date">
+                <span class="mono">{{ next_race.date }}</span>
+                {% if next_race.time %}
+                <span class="mono">{{ next_race.time }}</span>
+                {% endif %}
+                <a class="hero-cta" href="/predict">Win odds →</a>
             </div>
-            <div class="countdown-item">
-                <span class="countdown-value" id="countdown-seconds">--</span>
-                <span class="countdown-label">Secs</span>
+        </section>
+        {% elif not driver_standings and not constructor_standings %}
+        <section class="card empty-card">
+            <div class="empty-state">
+                <h3>Unable to load data</h3>
+                <p>Could not fetch data from the timing APIs. Check your connection and restart the app.</p>
             </div>
-        </div>
-        {% if next_race.has_sprint %}
-        <span class="badge badge-sprint">⚡ Sprint Weekend</span>
+        </section>
         {% endif %}
-        <div class="hero-date">
-            <span class="mono">{{ next_race.date }}</span>
-            {% if next_race.time %}
-            <span class="mono">{{ next_race.time }}</span>
-            {% endif %}
-        </div>
-    </section>
-    {% elif not driver_standings and not constructor_standings %}
-    <!-- No data at all — API likely down -->
-    <section class="card empty-card" style="opacity: 1;">
-        <div class="empty-state">
-            <span class="empty-icon">⚠️</span>
-            <h3>Unable to load data</h3>
-            <p>Could not fetch data from the F1 API. Check your internet connection and restart the app.</p>
-            <p style="margin-top: var(--space-sm); font-size: 0.8rem; color: var(--text-muted);">
-                Check your terminal for <code>[API Error]</code> messages for details.
-            </p>
-        </div>
-    </section>
-    {% endif %}
 
-    <div class="dashboard-grid">
-        <!-- Driver Standings Top 5 -->
+        <section class="pulse-strip">
+            <div class="pulse-stat">
+                <span class="pulse-label">Season</span>
+                <span class="pulse-value mono">{{ completed_rounds }}/{{ schedule_count or '—' }}</span>
+                <span class="pulse-hint">rounds complete</span>
+            </div>
+            <div class="pulse-stat">
+                <span class="pulse-label">Championship</span>
+                {% if leader %}
+                <span class="pulse-value">{{ leader.driver_code }}</span>
+                <span class="pulse-hint">{% if leader_gap is not none %}+{{ leader_gap | int }} pts{% else %}{{ leader.points | int }} pts{% endif %}</span>
+                {% else %}
+                <span class="pulse-value">—</span>
+                {% endif %}
+            </div>
+            <div class="pulse-stat">
+                <span class="pulse-label">Constructors</span>
+                {% if constructor_leader %}
+                <span class="pulse-value">{{ constructor_leader.constructor }}</span>
+                <span class="pulse-hint">{{ constructor_leader.points | int }} pts</span>
+                {% else %}
+                <span class="pulse-value">—</span>
+                {% endif %}
+            </div>
+            <a class="pulse-stat pulse-live" href="/live">
+                <span class="pulse-label"><span class="live-dot"></span> Timing</span>
+                <span class="pulse-value">Open live</span>
+                <span class="pulse-hint">Track map + tower</span>
+            </a>
+        </section>
+
         <section class="card card-accent standings-card" id="driver-standings-card">
             <div class="card-header">
-                <h2 class="card-title"><span class="card-title-icon">🏆</span> Driver Standings</h2>
-                <a href="/standings" class="card-link">View all →</a>
+                <h2 class="card-title">Drivers</h2>
+                <a href="/standings" class="card-link">Full table</a>
             </div>
             {% if driver_standings %}
             <div class="standings-list">
                 {% for driver in driver_standings %}
-                <a href="/driver/{{ driver.driver_code }}" class="standing-row" style="--delay: {{ loop.index * 0.05 }}s; text-decoration: none; color: inherit;">
+                <a href="/driver/{{ driver.driver_code }}" class="standing-row" style="--delay: {{ loop.index * 0.04 }}s">
                     <div class="standing-position">
-                        {% if loop.index == 1 %}
-                        <span class="position-badge gold">1</span>
-                        {% elif loop.index == 2 %}
-                        <span class="position-badge silver">2</span>
-                        {% elif loop.index == 3 %}
-                        <span class="position-badge bronze">3</span>
-                        {% else %}
-                        <span class="position-badge">{{ driver.position }}</span>
-                        {% endif %}
+                        <span class="position-badge {% if loop.index == 1 %}gold{% elif loop.index == 2 %}silver{% elif loop.index == 3 %}bronze{% endif %}">{{ driver.position }}</span>
                     </div>
                     <div class="standing-info">
                         <div class="team-colour-bar" style="background: {{ get_team_colour(driver.constructor) }}"></div>
@@ -99,22 +118,20 @@
             </div>
             {% else %}
             <div class="empty-state-inline">
-                <span class="empty-icon">🏎️</span>
-                <p>No driver standings available yet. Data will appear once the season begins.</p>
+                <p>Standings appear once the season has a classified result.</p>
             </div>
             {% endif %}
         </section>
 
-        <!-- Constructor Standings Top 5 -->
         <section class="card card-accent constructor-card" id="constructor-standings-card">
             <div class="card-header">
-                <h2 class="card-title"><span class="card-title-icon">🏗️</span> Constructor Battle</h2>
-                <a href="/standings" class="card-link">View all →</a>
+                <h2 class="card-title">Constructors</h2>
+                <a href="/standings" class="card-link">Full table</a>
             </div>
             {% if constructor_standings %}
             <div class="standings-list">
                 {% for team in constructor_standings %}
-                <div class="standing-row" style="--delay: {{ loop.index * 0.05 }}s">
+                <div class="standing-row" style="--delay: {{ loop.index * 0.04 }}s">
                     <div class="standing-position">
                         <span class="position-badge {% if loop.index == 1 %}gold{% elif loop.index == 2 %}silver{% elif loop.index == 3 %}bronze{% endif %}">{{ team.position }}</span>
                     </div>
@@ -136,16 +153,15 @@
             </div>
             {% else %}
             <div class="empty-state-inline">
-                <span class="empty-icon">🏗️</span>
-                <p>No constructor standings available yet.</p>
+                <p>Constructor order fills in after round one.</p>
             </div>
             {% endif %}
         </section>
 
-        <!-- Recent Race Results -->
         <section class="card card-accent recent-card" id="recent-results-card">
             <div class="card-header">
-                <h2 class="card-title"><span class="card-title-icon">🏁</span> Recent Results</h2>
+                <h2 class="card-title">Recent results</h2>
+                <a href="/calendar" class="card-link">Calendar</a>
             </div>
             {% if recent_results %}
             <div class="recent-races">
@@ -170,8 +186,7 @@
             </div>
             {% else %}
             <div class="empty-state-inline">
-                <span class="empty-icon">🏁</span>
-                <p>No race results yet this season.</p>
+                <p>No classified races yet this season.</p>
             </div>
             {% endif %}
         </section>

@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 
-{% block title %}{{ season }} F1 Championship Standings{% endblock %}
+{% block title %}{{ season }} Championship — Apex{% endblock %}
 {% block meta_description %}Complete {{ season }} Formula 1 driver and constructor championship standings with points and wins.{% endblock %}
+{% block topbar_label %}Standings{% endblock %}
 
 {% block head_scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -9,7 +10,8 @@
 
 {% block content %}
 <div class="page-header">
-    <h1 class="page-title">{{ season }} Championship
+    <p class="eyebrow">World Championship</p>
+    <h1 class="page-title">{{ season }} standings
         <span class="season-selector">
             <select class="season-select" id="season-select" onchange="window.location.href='/standings?season=' + this.value">
                 {% for yr in range(2026, 2019, -1) %}
@@ -18,13 +20,97 @@
             </select>
         </span>
     </h1>
+    <p class="page-subtitle">Simulate remaining rounds, then watch the tables and charts re-rank live.</p>
 </div>
+
+{% if remaining_races %}
+<!-- Championship Standings Predictor -->
+<section class="card card-accent" id="standings-predictor-card">
+    <div class="card-header">
+        <h2 class="card-title">What-if simulator</h2>
+        <span class="panel-badge mono" style="background: rgba(39, 244, 210, 0.12); color: rgb(39, 244, 210); font-size: 0.75rem;">
+            {% if is_historic_simulation %}Simulating Last 5 Rounds{% else %}Simulating Remaining Rounds{% endif %}
+        </span>
+    </div>
+    
+    <p style="padding: 0 var(--space-md); color: var(--text-secondary); font-size: 0.9rem; margin-bottom: var(--space-md);">
+        Predict the top three finishers and fastest lap for each round. Standings tables and charts will update dynamically in real-time.
+    </p>
+
+    <div class="predictor-scroll-container" style="overflow-x: auto; padding: 0 var(--space-md) var(--space-md) var(--space-md); margin-bottom: var(--space-md);">
+        <div class="predictor-grid" style="display: flex; gap: var(--space-md); min-width: max-content;">
+            {% for race in remaining_races %}
+            <div class="predictor-race-card" data-round="{{ race.round }}" data-race-name="{{ race.race_name }}" style="background: var(--bg-surface); padding: var(--space-md); border-radius: var(--radius-md); border: 1px solid var(--glass-border); min-width: 250px;">
+                <div class="predictor-race-header" style="display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-sm); border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 6px;">
+                    <span class="predictor-flag" style="font-size: 1.25rem;">{{ get_flag(race.country) }}</span>
+                    <div class="predictor-race-info" style="display: flex; flex-direction: column;">
+                        <span class="predictor-race-title mono" style="font-weight: 700; font-size: 0.85rem;">R{{ race.round }}: {{ race.race_name | replace(' Grand Prix', '') }}</span>
+                        <span class="predictor-race-country" style="font-size: 0.75rem; color: var(--text-muted);">{{ race.locality }}</span>
+                    </div>
+                </div>
+                
+                <div class="predictor-dropdowns" style="display: flex; flex-direction: column; gap: 6px;">
+                    <div class="predictor-select-group" style="display: flex; flex-direction: column; gap: 2px;">
+                        <label class="predictor-select-label" style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">P1 (+25)</label>
+                        <select class="predictor-select select-p1" onchange="runSimulation()" style="width: 100%; background: var(--bg-primary); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: var(--radius-sm); padding: 4px; font-size: 0.8rem;">
+                            <option value="">Choose P1...</option>
+                            {% for d in driver_standings %}
+                            <option value="{{ d.driver_code }}" data-constructor="{{ d.constructor }}">
+                                {{ d.driver_code }} — {{ d.driver_name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="predictor-select-group" style="display: flex; flex-direction: column; gap: 2px;">
+                        <label class="predictor-select-label" style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">P2 (+18)</label>
+                        <select class="predictor-select select-p2" onchange="runSimulation()" style="width: 100%; background: var(--bg-primary); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: var(--radius-sm); padding: 4px; font-size: 0.8rem;">
+                            <option value="">Choose P2...</option>
+                            {% for d in driver_standings %}
+                            <option value="{{ d.driver_code }}" data-constructor="{{ d.constructor }}">
+                                {{ d.driver_code }} — {{ d.driver_name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="predictor-select-group" style="display: flex; flex-direction: column; gap: 2px;">
+                        <label class="predictor-select-label" style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">P3 (+15)</label>
+                        <select class="predictor-select select-p3" onchange="runSimulation()" style="width: 100%; background: var(--bg-primary); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: var(--radius-sm); padding: 4px; font-size: 0.8rem;">
+                            <option value="">Choose P3...</option>
+                            {% for d in driver_standings %}
+                            <option value="{{ d.driver_code }}" data-constructor="{{ d.constructor }}">
+                                {{ d.driver_code }} — {{ d.driver_name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="predictor-select-group" style="display: flex; flex-direction: column; gap: 2px;">
+                        <label class="predictor-select-label" style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Fastest Lap (+1)</label>
+                        <select class="predictor-select select-fl" onchange="runSimulation()" style="width: 100%; background: var(--bg-primary); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: var(--radius-sm); padding: 4px; font-size: 0.8rem;">
+                            <option value="">Choose FL...</option>
+                            {% for d in driver_standings %}
+                            <option value="{{ d.driver_code }}" data-constructor="{{ d.constructor }}">
+                                {{ d.driver_code }} — {{ d.driver_name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <div style="padding: var(--space-md); text-align: right; border-top: 1px solid rgba(255,255,255,0.05);">
+        <button class="compare-btn" onclick="resetSimulation()" style="height: 36px; padding: 0 var(--space-lg); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.05); border: 1px solid var(--glass-border); color: var(--text-primary); cursor: pointer; font-weight: 600; transition: background 0.2s;">Reset Predictor</button>
+    </div>
+</section>
+{% endif %}
 
 <div class="standings-page">
     <!-- Driver Championship -->
     <section class="card card-accent full-standings-card" id="full-driver-standings">
         <div class="card-header">
-            <h2 class="card-title"><span class="card-title-icon">🏆</span> Driver Championship</h2>
+            <h2 class="card-title">Drivers</h2>
         </div>
 
         <!-- Points bar chart -->
@@ -44,7 +130,7 @@
                         <th>Wins</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="driver-standings-body">
                     {% for d in driver_standings %}
                     <tr class="result-row" style="--delay: {{ loop.index * 0.03 }}s">
                         <td>
@@ -75,7 +161,7 @@
     <!-- Constructor Championship -->
     <section class="card card-accent full-standings-card" id="full-constructor-standings">
         <div class="card-header">
-            <h2 class="card-title"><span class="card-title-icon">🏗️</span> Constructor Championship</h2>
+            <h2 class="card-title">Constructors</h2>
         </div>
 
         <div class="chart-container" style="margin-bottom: 2rem;">
@@ -93,7 +179,7 @@
                         <th>Wins</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="constructor-standings-body">
                     {% for c in constructor_standings %}
                     <tr class="result-row" style="--delay: {{ loop.index * 0.03 }}s">
                         <td>
@@ -121,21 +207,269 @@
 
 {% block scripts %}
 <script>
-    const driverData = {
-        labels: [{% for d in driver_standings %}"{{ d.driver_code }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-        points: [{% for d in driver_standings %}{{ d.points }}{% if not loop.last %}, {% endif %}{% endfor %}],
-        colours: [{% for d in driver_standings %}"{{ get_team_colour(d.constructor) }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-    };
+    // Store starting snapshot
+    const baseDrivers = [
+        {% for d in driver_standings %}
+        {
+            code: "{{ d.driver_code }}",
+            name: "{{ d.driver_name }}",
+            constructor: "{{ d.constructor }}",
+            nationality: "{{ d.nationality }}",
+            points: {{ d.points }},
+            wins: {{ d.wins }},
+            startPos: {{ loop.index }},
+            color: "{{ get_team_colour(d.constructor) }}"
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
 
-    const constructorData = {
-        labels: [{% for c in constructor_standings %}"{{ c.constructor }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-        points: [{% for c in constructor_standings %}{{ c.points }}{% if not loop.last %}, {% endif %}{% endfor %}],
-        colours: [{% for c in constructor_standings %}"{{ get_team_colour(c.constructor) }}"{% if not loop.last %}, {% endif %}{% endfor %}],
-    };
+    const baseConstructors = [
+        {% for c in constructor_standings %}
+        {
+            constructor: "{{ c.constructor }}",
+            points: {{ c.points }},
+            wins: {{ c.wins }},
+            nationality: "{{ c.nationality }}",
+            startPos: {{ loop.index }},
+            color: "{{ get_team_colour(c.constructor) }}"
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
+
+    let driverChart = null;
+    let constructorChart = null;
 
     document.addEventListener('DOMContentLoaded', function() {
-        initPointsChart('driverPointsChart', driverData, 'Driver Points');
-        initPointsChart('constructorPointsChart', constructorData, 'Constructor Points');
+        // Initialize Driver Chart
+        const driverCtx = document.getElementById('driverPointsChart');
+        if (driverCtx) {
+            driverChart = new Chart(driverCtx, {
+                type: 'bar',
+                data: {
+                    labels: baseDrivers.map(d => d.code),
+                    datasets: [{
+                        label: 'Driver Points',
+                        data: baseDrivers.map(d => d.points),
+                        backgroundColor: baseDrivers.map(d => d.color + '44'),
+                        borderColor: baseDrivers.map(d => d.color),
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        barThickness: 16
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(31, 31, 39, 0.95)',
+                            borderColor: 'rgba(255, 255, 255, 0.1)',
+                            borderWidth: 1,
+                            cornerRadius: 8,
+                            padding: 12,
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.04)' } },
+                        y: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+
+        // Initialize Constructor Chart
+        const constructorCtx = document.getElementById('constructorPointsChart');
+        if (constructorCtx) {
+            constructorChart = new Chart(constructorCtx, {
+                type: 'bar',
+                data: {
+                    labels: baseConstructors.map(c => c.constructor),
+                    datasets: [{
+                        label: 'Constructor Points',
+                        data: baseConstructors.map(c => c.points),
+                        backgroundColor: baseConstructors.map(c => c.color + '44'),
+                        borderColor: baseConstructors.map(c => c.color),
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        barThickness: 20
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(31, 31, 39, 0.95)',
+                            borderColor: 'rgba(255, 255, 255, 0.1)',
+                            borderWidth: 1,
+                            cornerRadius: 8,
+                            padding: 12,
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.04)' } },
+                        y: { grid: { display: false } }
+                    }
+                }
+            });
+        }
     });
+
+    function runSimulation() {
+        // Create copies of base scores
+        const drivers = baseDrivers.map(d => ({...d}));
+        const constructors = baseConstructors.map(c => ({...c}));
+
+        // Loop races and apply points
+        const cards = document.querySelectorAll('.predictor-race-card');
+        cards.forEach(card => {
+            const p1 = card.querySelector('.select-p1').value;
+            const p2 = card.querySelector('.select-p2').value;
+            const p3 = card.querySelector('.select-p3').value;
+            const fl = card.querySelector('.select-fl').value;
+
+            if (p1) {
+                const d = drivers.find(x => x.code === p1);
+                if (d) {
+                    d.points += 25;
+                    d.wins += 1;
+                    const c = constructors.find(x => x.constructor === d.constructor);
+                    if (c) {
+                        c.points += 25;
+                        c.wins += 1;
+                    }
+                }
+            }
+            if (p2) {
+                const d = drivers.find(x => x.code === p2);
+                if (d) {
+                    d.points += 18;
+                    const c = constructors.find(x => x.constructor === d.constructor);
+                    if (c) c.points += 18;
+                }
+            }
+            if (p3) {
+                const d = drivers.find(x => x.code === p3);
+                if (d) {
+                    d.points += 15;
+                    const c = constructors.find(x => x.constructor === d.constructor);
+                    if (c) c.points += 15;
+                }
+            }
+            if (fl) {
+                const d = drivers.find(x => x.code === fl);
+                if (d) {
+                    d.points += 1;
+                    const c = constructors.find(x => x.constructor === d.constructor);
+                    if (c) c.points += 1;
+                }
+            }
+        });
+
+        // Re-sort standings arrays
+        drivers.sort((a, b) => b.points - a.points || b.wins - a.wins);
+        constructors.sort((a, b) => b.points - a.points || b.wins - a.wins);
+
+        // Update Driver Table HTML
+        const dBody = document.getElementById('driver-standings-body');
+        let dHtml = '';
+        drivers.forEach((d, idx) => {
+            const pos = idx + 1;
+            const shift = d.startPos - pos;
+            let badge = '';
+            if (shift > 0) {
+                badge = `<span class="shift-badge shift-up">▲${shift}</span>`;
+            } else if (shift < 0) {
+                badge = `<span class="shift-badge shift-down">▼${Math.abs(shift)}</span>`;
+            }
+
+            dHtml += `
+                <tr class="result-row simulated-row">
+                    <td>
+                        <span class="position-badge ${pos === 1 ? 'gold' : pos === 2 ? 'silver' : pos === 3 ? 'bronze' : ''}">
+                            ${pos}
+                        </span>
+                        ${badge}
+                    </td>
+                    <td>
+                        <a href="/driver/${d.code}" class="driver-cell" style="text-decoration: none; color: inherit;">
+                            <div class="team-colour-bar-sm" style="background: ${d.color}"></div>
+                            <div>
+                                <span class="driver-code mono">${d.code}</span>
+                                <span class="driver-fullname">${d.name}</span>
+                            </div>
+                        </a>
+                    </td>
+                    <td><span class="team-label" style="color: ${d.color}">${d.constructor}</span></td>
+                    <td>${d.nationality}</td>
+                    <td class="mono points-cell" style="${shift !== 0 ? 'color: var(--gold); font-weight: bold;' : ''}">${Math.round(d.points)}</td>
+                    <td class="mono">${d.wins}</td>
+                </tr>
+            `;
+        });
+        dBody.innerHTML = dHtml;
+
+        // Update Constructor Table HTML
+        const cBody = document.getElementById('constructor-standings-body');
+        let cHtml = '';
+        constructors.forEach((c, idx) => {
+            const pos = idx + 1;
+            const shift = c.startPos - pos;
+            let badge = '';
+            if (shift > 0) {
+                badge = `<span class="shift-badge shift-up">▲${shift}</span>`;
+            } else if (shift < 0) {
+                badge = `<span class="shift-badge shift-down">▼${Math.abs(shift)}</span>`;
+            }
+
+            cHtml += `
+                <tr class="result-row simulated-row">
+                    <td>
+                        <span class="position-badge ${pos === 1 ? 'gold' : pos === 2 ? 'silver' : pos === 3 ? 'bronze' : ''}">
+                            ${pos}
+                        </span>
+                        ${badge}
+                    </td>
+                    <td>
+                        <div class="driver-cell">
+                            <div class="team-colour-bar-sm" style="background: ${c.color}"></div>
+                            <span class="team-label" style="color: ${c.color}">${c.constructor}</span>
+                        </div>
+                    </td>
+                    <td>${c.nationality}</td>
+                    <td class="mono points-cell" style="${shift !== 0 ? 'color: var(--gold); font-weight: bold;' : ''}">${Math.round(c.points)}</td>
+                    <td class="mono">${c.wins}</td>
+                </tr>
+            `;
+        });
+        cBody.innerHTML = cHtml;
+
+        // Update charts dynamically with animations
+        if (driverChart) {
+            driverChart.data.labels = drivers.map(d => d.code);
+            driverChart.data.datasets[0].data = drivers.map(d => d.points);
+            driverChart.data.datasets[0].backgroundColor = drivers.map(d => d.color + '44');
+            driverChart.data.datasets[0].borderColor = drivers.map(d => d.color);
+            driverChart.update();
+        }
+
+        if (constructorChart) {
+            constructorChart.data.labels = constructors.map(c => c.constructor);
+            constructorChart.data.datasets[0].data = constructors.map(c => c.points);
+            constructorChart.data.datasets[0].backgroundColor = constructors.map(c => c.color + '44');
+            constructorChart.data.datasets[0].borderColor = constructors.map(c => c.color);
+            constructorChart.update();
+        }
+    }
+
+    function resetSimulation() {
+        const selects = document.querySelectorAll('.predictor-select');
+        selects.forEach(sel => sel.value = '');
+        runSimulation();
+    }
 </script>
 {% endblock %}

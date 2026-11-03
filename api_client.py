@@ -48,6 +48,7 @@ class F1DataClient:
         self._openf1_auth_lock = threading.Lock()
         self._last_request_time = 0
         self._backoff_until = 0  # Timestamp until which we should back off (429 handling)
+        self._session = requests.Session()  # Use HTTP Keep-Alive to avoid TCP exhaustion
         # OpenF1 requires authentication for real-time data. A long-lived
         # username/password pair can refresh tokens automatically; an access
         # token is also accepted for deployments that manage it externally.
@@ -72,8 +73,8 @@ class F1DataClient:
                 time.sleep(wait)
             else:
                 elapsed = now - self._last_request_time
-                if elapsed < 0.5:
-                    time.sleep(0.5 - elapsed)
+                if elapsed < 1.2:
+                    time.sleep(1.2 - elapsed)
             self._last_request_time = time.time()
 
     @property
@@ -110,7 +111,7 @@ class F1DataClient:
                 return self._openf1_access_token
 
             try:
-                response = requests.post(
+                response = self._session.post(
                     "https://api.openf1.org/token",
                     data={
                         "username": self._openf1_username,
@@ -163,38 +164,65 @@ class F1DataClient:
 
     def _fetch_json(self, url, params=None, timeout=15):
         """Fetch JSON from a URL with rate limiting, error handling, and 429 backoff."""
-        self._rate_limit()
-        try:
-            is_openf1 = url.startswith(self.OPENF1_BASE)
-            headers = self._openf1_headers() if is_openf1 else None
-            resp = requests.get(url, params=params, timeout=timeout, headers=headers)
-
-            # Tokens can expire between requests. When credentials are supplied,
-            # refresh and retry once before treating the response as a failure.
-            if (
-                resp.status_code == 401
-                and is_openf1
-                and self._openf1_username
-                and self._openf1_password
-            ):
-                headers = self._openf1_headers(force_token_refresh=True)
-                resp = requests.get(url, params=params, timeout=timeout, headers=headers)
-
-            if resp.status_code == 429:
-                # Back off for 10 seconds on rate limit hit
-                with self._rate_lock:
-                    self._backoff_until = time.time() + 10
-                print(f"[API Rate Limited] {url} — backing off 10s")
-                return None
-            if resp.status_code == 401 and is_openf1:
-                self._record_openf1_unauthorized()
-            resp.raise_for_status()
-            if is_openf1:
-                self._openf1_last_error = None
-            return resp.json()
-        except requests.RequestException as e:
-            print(f"[API Error] {url}: {e}")
+        # Build a stable cache key for 404 suppression
+        import urllib.parse
+        _404_key = f"_404_{url}_{urllib.parse.urlencode(sorted((params or {}).items()))}"
+        if self._mem_get(_404_key, 60) is not None:  # suppress for 60s after a 404
             return None
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            self._rate_limit()
+            try:
+                is_openf1 = url.startswith(self.OPENF1_BASE)
+                headers = self._openf1_headers() if is_openf1 else None
+                resp = self._session.get(url, params=params, timeout=timeout, headers=headers)
+
+                # Tokens can expire between requests. When credentials are supplied,
+                # refresh and retry once before treating the response as a failure.
+                if (
+                    resp.status_code == 401
+                    and is_openf1
+                    and self._openf1_username
+                    and self._openf1_password
+                ):
+                    headers = self._openf1_headers(force_token_refresh=True)
+                    resp = self._session.get(url, params=params, timeout=timeout, headers=headers)
+
+                if resp.status_code == 429:
+                    # Back off for 10 seconds on rate limit hit
+                    with self._rate_lock:
+                        self._backoff_until = time.time() + 10
+                    print(f"[API Rate Limited] {url} — backing off 10s")
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return None
+                if resp.status_code == 404:
+                    # Cache the 404 for 60s to avoid hammering the API on stale session keys
+                    self._mem_set(_404_key, True)
+                    print(f"[API 404 — suppressing 60s] {url}")
+                    return None
+                if resp.status_code == 401 and is_openf1:
+                    self._record_openf1_unauthorized()
+                resp.raise_for_status()
+                if is_openf1:
+                    self._openf1_last_error = None
+                return resp.json()
+            except (requests.RequestException, ConnectionResetError) as e:
+                # Discard broken connection pool if connection reset occurred
+                try:
+                    self._session.close()
+                except Exception:
+                    pass
+                self._session = requests.Session()
+                self._session.headers.update({"User-Agent": "F1Dashboard/2.0"})
+                if attempt < max_retries - 1:
+                    print(f"[API Retry {attempt+1}/{max_retries}] {url}: {e}")
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                print(f"[API Error] {url}: {e}")
+                return None
 
     @property
     def live_timing_last_error(self):
@@ -205,7 +233,7 @@ class F1DataClient:
         """Fetch a Formula 1 Live Timing feed, accounting for its UTF-8 BOM."""
         self._rate_limit()
         try:
-            response = requests.get(
+            response = self._session.get(
                 url,
                 headers={"Accept": "application/json"},
                 timeout=timeout,
@@ -344,6 +372,95 @@ class F1DataClient:
             upsert("results", rows)
 
         return sorted(rows, key=lambda x: x["position"])
+
+    def get_season_results(self, season):
+        """Get all race results for a season from cache or API in a single query."""
+        cached = get_cached("results", {"season": season}, self.CACHE_HISTORICAL)
+        if cached:
+            return cached
+
+        url = f"{self.JOLPICA_BASE}/{season}/results.json?limit=1000"
+        data = self._fetch_json(url)
+        if not data:
+            return []
+
+        races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
+        now = datetime.now(timezone.utc).isoformat()
+
+        all_rows = []
+        for race in races:
+            round_num = int(race.get("round", 0))
+            results = race.get("Results", [])
+            for r in results:
+                driver = r.get("Driver", {})
+                constructor = r.get("Constructor", {})
+                fastest_lap = r.get("FastestLap", {})
+                time_info = r.get("Time", {})
+
+                all_rows.append({
+                    "season": season,
+                    "round": round_num,
+                    "position": int(r.get("position", 0)),
+                    "driver_id": driver.get("driverId", ""),
+                    "driver_code": driver.get("code", ""),
+                    "driver_name": f"{driver.get('givenName', '')} {driver.get('familyName', '')}",
+                    "constructor": constructor.get("name", ""),
+                    "grid": int(r.get("grid", 0)),
+                    "laps": int(r.get("laps", 0)),
+                    "status": r.get("status", ""),
+                    "time_text": time_info.get("time", r.get("status", "")),
+                    "points": float(r.get("points", 0)),
+                    "fastest_lap_time": fastest_lap.get("Time", {}).get("time", ""),
+                    "fastest_lap_rank": int(fastest_lap.get("rank", 0)) if fastest_lap.get("rank") else None,
+                    "fetched_at": now,
+                })
+
+        if all_rows:
+            clear_table("results", {"season": season})
+            upsert("results", all_rows)
+
+        return all_rows
+
+    def get_season_qualifying(self, season):
+        """Get all qualifying results for a season from cache or API in a single query."""
+        cached = get_cached("qualifying", {"season": season}, self.CACHE_HISTORICAL)
+        if cached:
+            return cached
+
+        url = f"{self.JOLPICA_BASE}/{season}/qualifying.json?limit=1000"
+        data = self._fetch_json(url)
+        if not data:
+            return []
+
+        races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
+        now = datetime.now(timezone.utc).isoformat()
+
+        all_rows = []
+        for race in races:
+            round_num = int(race.get("round", 0))
+            quali = race.get("QualifyingResults", [])
+            for q in quali:
+                driver = q.get("Driver", {})
+                constructor = q.get("Constructor", {})
+
+                all_rows.append({
+                    "season": season,
+                    "round": round_num,
+                    "position": int(q.get("position", 0)),
+                    "driver_code": driver.get("code", ""),
+                    "driver_name": f"{driver.get('givenName', '')} {driver.get('familyName', '')}",
+                    "constructor": constructor.get("name", ""),
+                    "q1": q.get("Q1", ""),
+                    "q2": q.get("Q2", ""),
+                    "q3": q.get("Q3", ""),
+                    "fetched_at": now,
+                })
+
+        if all_rows:
+            clear_table("qualifying", {"season": season})
+            upsert("qualifying", all_rows)
+
+        return all_rows
 
     # ── Qualifying ────────────────────────────────────────────────
 
@@ -674,9 +791,23 @@ class F1DataClient:
                 s_country = (s.get("country_name") or "").lower()
                 s_date = (s.get("date_start") or "")[:10]  # YYYY-MM-DD
 
-                # Date match is strongest signal
-                if race_date and s_date == race_date:
-                    score += 10
+                # Date proximity match (strongest signal)
+                if race_date and s_date:
+                    try:
+                        d1 = datetime.strptime(race_date, "%Y-%m-%d")
+                        d2 = datetime.strptime(s_date, "%Y-%m-%d")
+                        diff_days = abs((d1 - d2).days)
+                        if diff_days == 0:
+                            score += 10
+                        elif diff_days == 1:
+                            score += 8
+                        elif diff_days == 2:
+                            score += 6
+                        elif diff_days <= 3:
+                            score += 4
+                    except Exception:
+                        if s_date == race_date:
+                            score += 10
 
                 # Country match
                 if country and s_country and (country in s_country or s_country in country):
@@ -784,13 +915,41 @@ class F1DataClient:
 
         self._mem_set(cache_key, rows)
         return rows
+    def is_session_live(self, session_key):
+        """Determine if a session is currently active/live. Historic sessions are cached long-term."""
+        # Query local DB first for cached session info
+        cached = get_cached("openf1_sessions", {"session_key": session_key}, 8760)
 
-    # ── Positions ─────────────────────────────────────────────────
+        session_info = None
+        if cached:
+            session_info = cached[0]
+        else:
+            # If session is not cached, we fallback to querying the API
+            url = f"{self.OPENF1_BASE}/sessions"
+            data = self._fetch_json(url, params={"session_key": session_key})
+            if data and isinstance(data, list):
+                session_info = data[0]
+
+        if not session_info:
+            return False
+
+        date_end_str = session_info.get("date_end")
+        if not date_end_str:
+            return True
+
+        try:
+            clean_str = date_end_str.split("+")[0].split("Z")[0]
+            date_end = datetime.fromisoformat(clean_str).replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            return (now - date_end) < timedelta(hours=2)
+        except Exception:
+            return True
 
     def get_positions(self, session_key):
-        """Get the latest position for each driver. Memory-cached 15s."""
+        """Get the latest position for each driver. Memory-cached 15s (live) / 12h (historic)."""
         cache_key = f"positions_{session_key}"
-        mem = self._mem_get(cache_key, self.MEM_TTL_POSITIONS)
+        ttl = self.MEM_TTL_POSITIONS if self.is_session_live(session_key) else 43200
+        mem = self._mem_get(cache_key, ttl)
         if mem is not None:
             return mem
 
@@ -811,12 +970,11 @@ class F1DataClient:
         return result
 
     # ── Car Locations (latest per driver) ─────────────────────────
-
     def get_car_locations(self, session_key):
-        """Get the latest car position for each driver. Memory-cached 10s.
-        Uses date> filter for live sessions; returns cached/empty for historical."""
+        """Get the latest car position for each driver. Memory-cached 10s (live) / 12h (historic)."""
         cache_key = f"locations_{session_key}"
-        mem = self._mem_get(cache_key, self.MEM_TTL_LOCATIONS)
+        ttl = self.MEM_TTL_LOCATIONS if self.is_session_live(session_key) else 43200
+        mem = self._mem_get(cache_key, ttl)
         if mem is not None:
             return mem
 
@@ -963,16 +1121,19 @@ class F1DataClient:
         return raw_points
 
     # ── Laps with Sector Times ────────────────────────────────────
-
     def get_openf1_laps(self, session_key):
-        """Get all lap data with sector times. Memory-cached 15s, SQLite 10s."""
+        """Get all lap data with sector times. Memory-cached 15s (live) / 12h (historic)."""
         cache_key = f"of1_laps_{session_key}"
-        mem = self._mem_get(cache_key, self.MEM_TTL_LAPS)
+        is_live = self.is_session_live(session_key)
+        mem_ttl = self.MEM_TTL_LAPS if is_live else 43200
+        db_ttl = 0.003 if is_live else 8760.0
+
+        mem = self._mem_get(cache_key, mem_ttl)
         if mem is not None:
             return mem
 
         # SQLite cache
-        cached = get_cached("openf1_laps", {"session_key": session_key}, 0.003)  # ~10 seconds
+        cached = get_cached("openf1_laps", {"session_key": session_key}, db_ttl)
         if cached:
             self._mem_set(cache_key, cached)
             return cached
@@ -1007,11 +1168,11 @@ class F1DataClient:
         return rows
 
     # ── Intervals ─────────────────────────────────────────────────
-
     def get_intervals(self, session_key):
-        """Get gap to leader + gap ahead per driver. Memory-cached 15s."""
+        """Get gap to leader + gap ahead per driver. Memory-cached 15s (live) / 12h (historic)."""
         cache_key = f"intervals_{session_key}"
-        mem = self._mem_get(cache_key, self.MEM_TTL_INTERVALS)
+        ttl = self.MEM_TTL_INTERVALS if self.is_session_live(session_key) else 43200
+        mem = self._mem_get(cache_key, ttl)
         if mem is not None:
             return mem
 
@@ -1031,16 +1192,19 @@ class F1DataClient:
         return result
 
     # ── Stints ────────────────────────────────────────────────────
-
     def get_stints(self, session_key):
-        """Get stint / tyre strategy data. Memory-cached 30s."""
+        """Get stint / tyre strategy data. Memory-cached 30s (live) / 12h (historic)."""
         cache_key = f"stints_{session_key}"
-        mem = self._mem_get(cache_key, self.MEM_TTL_STINTS)
+        is_live = self.is_session_live(session_key)
+        mem_ttl = self.MEM_TTL_STINTS if is_live else 43200
+        db_ttl = 0.008 if is_live else 8760.0
+
+        mem = self._mem_get(cache_key, mem_ttl)
         if mem is not None:
             return mem
 
         # SQLite cache
-        cached = get_cached("stints", {"session_key": session_key}, 0.008)  # ~30 seconds
+        cached = get_cached("stints", {"session_key": session_key}, db_ttl)
         if cached:
             self._mem_set(cache_key, cached)
             return cached
@@ -1072,11 +1236,11 @@ class F1DataClient:
         return rows
 
     # ── Weather ───────────────────────────────────────────────────
-
     def get_weather(self, session_key):
-        """Get the latest weather data. Memory-cached 60s."""
+        """Get the latest weather data. Memory-cached 60s (live) / 12h (historic)."""
         cache_key = f"weather_{session_key}"
-        mem = self._mem_get(cache_key, self.MEM_TTL_WEATHER)
+        ttl = self.MEM_TTL_WEATHER if self.is_session_live(session_key) else 43200
+        mem = self._mem_get(cache_key, ttl)
         if mem is not None:
             return mem
 
@@ -1092,9 +1256,10 @@ class F1DataClient:
     # ── Race Control ──────────────────────────────────────────────
 
     def get_race_control(self, session_key):
-        """Get race control messages. Memory-cached 20s."""
+        """Get race control messages. Memory-cached 20s (live) / 12h (historic)."""
         cache_key = f"rc_{session_key}"
-        mem = self._mem_get(cache_key, self.MEM_TTL_RACE_CONTROL)
+        ttl = self.MEM_TTL_RACE_CONTROL if self.is_session_live(session_key) else 43200
+        mem = self._mem_get(cache_key, ttl)
         if mem is not None:
             return mem
 
@@ -1105,7 +1270,6 @@ class F1DataClient:
 
         self._mem_set(cache_key, data)
         return data
-
     # ── Car Telemetry ─────────────────────────────────────────────
 
     def get_car_telemetry(self, session_key, driver_number):
@@ -1126,6 +1290,45 @@ class F1DataClient:
         result = data[-1] if data else {}
         self._mem_set(cache_key, result)
         return result
+
+    def get_lap_telemetry(self, session_key, driver_number, start_time_iso, duration_seconds):
+        """Get high-frequency telemetry samples for a specific lap duration."""
+        if not start_time_iso:
+            return []
+
+        try:
+            start_dt = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
+            end_dt = start_dt + timedelta(seconds=float(duration_seconds or 100.0))
+            
+            start_str = start_dt.isoformat()
+            end_str = end_dt.isoformat()
+        except Exception as e:
+            print(f"[Telemetry Date Parse Error] {e} for {start_time_iso}")
+            return []
+
+        cache_key = f"lap_telemetry_{session_key}_{driver_number}_{start_time_iso}"
+        mem = self._mem_get(cache_key, 3600)  # static lap telemetry, cache 1 hour
+        if mem is not None:
+            return mem
+
+        url = f"{self.OPENF1_BASE}/car_data"
+        params = {
+            "session_key": session_key,
+            "driver_number": driver_number,
+            "date>=": start_str,
+            "date<=": end_str,
+        }
+        data = self._fetch_json(url, params=params)
+        if not data or not isinstance(data, list):
+            return []
+
+        # Downsample to 150 points for browser rendering performance
+        if len(data) > 150:
+            step = len(data) / 150
+            data = [data[int(i * step)] for i in range(150)]
+
+        self._mem_set(cache_key, data)
+        return data
 
     # ══════════════════════════════════════════════════════════════
     # Formula 1 Live Timing Methods
@@ -1472,3 +1675,97 @@ class F1DataClient:
 
         self._mem_set(cache_key, points)
         return points
+
+    # ══════════════════════════════════════════════════════════════
+    # Unified Methods — OpenF1 → F1 Live Timing fallback
+    #
+    # These combine both data sources so the dashboard works without
+    # any API credentials.  OpenF1's free tier covers historical and
+    # recently-completed sessions; the official F1 Live Timing static
+    # feeds cover in-progress and recent sessions with zero auth.
+    # ══════════════════════════════════════════════════════════════
+
+    def _init_data_source(self):
+        """Lazily initialised per-request data source tracker."""
+        if not hasattr(self, "_last_data_source"):
+            self._last_data_source = "unknown"
+
+    @property
+    def last_data_source(self):
+        """Which backend provided the most recent live-page data."""
+        return getattr(self, "_last_data_source", "unknown")
+
+    def _unified(self, primary_fn, fallback_fn, *args, empty_ok=False):
+        """Shared OpenF1-first / F1-Live-Timing-fallback pattern.
+
+        `empty_ok` should be True for endpoints (like weather) where an
+        empty dict/list is still a meaningful "no data yet" result from
+        the primary source and shouldn't trigger a fallback attempt —
+        currently unused since both APIs legitimately return empty
+        collections when there's nothing to report, but kept as a hook
+        for future sources that distinguish "empty" from "error".
+        """
+        try:
+            primary = primary_fn(*args)
+        except Exception as e:
+            print(f"[Unified] Primary source error: {e}")
+            primary = None
+
+        # Use truthiness: an empty list/dict from OpenF1 (e.g. 404 → no data)
+        # correctly falls through to the F1 Live Timing backup.
+        if primary:
+            self._last_data_source = "openf1"
+            return primary
+
+        try:
+            fallback = fallback_fn(*args)
+        except Exception as e:
+            print(f"[Unified] Fallback source error: {e}")
+            fallback = None
+
+        if fallback:
+            self._last_data_source = "f1_live"
+            return fallback
+
+        # Neither source had data — return a safe empty collection.
+        return []
+
+    def get_unified_sessions(self, year):
+        """Get sessions for a year — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_openf1_sessions, self.get_live_sessions, year)
+
+    def get_unified_drivers(self, session_key):
+        """Get driver metadata — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_openf1_drivers, self.get_live_drivers, session_key)
+
+    def get_unified_positions(self, session_key):
+        """Get position data — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_positions, self.get_live_positions, session_key)
+
+    def get_unified_locations(self, session_key):
+        """Get car locations — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_car_locations, self.get_live_car_locations, session_key)
+
+    def get_unified_laps(self, session_key):
+        """Get lap/sector data — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_openf1_laps, self.get_live_laps, session_key)
+
+    def get_unified_intervals(self, session_key):
+        """Get gap/interval data — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_intervals, self.get_live_intervals, session_key)
+
+    def get_unified_stints(self, session_key):
+        """Get tyre stint data — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_stints, self.get_live_stints, session_key)
+
+    def get_unified_weather(self, session_key):
+        """Get weather data — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_weather, self.get_live_weather, session_key)
+
+    def get_unified_race_control(self, session_key):
+        """Get race control messages — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_race_control, self.get_live_race_control, session_key)
+
+    def get_unified_track_outline(self, session_key):
+        """Get track outline — OpenF1 first, then F1 Live Timing."""
+        return self._unified(self.get_track_outline, self.get_live_track_outline, session_key)

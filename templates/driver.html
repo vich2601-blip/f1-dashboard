@@ -2,6 +2,7 @@
 
 {% block title %}{{ driver.driver_name if driver else 'Driver' }} — {{ season }} Profile{% endblock %}
 {% block meta_description %}{{ season }} season stats and race-by-race results for {{ driver.driver_name if driver else 'driver' }}.{% endblock %}
+{% block topbar_label %}Driver{% endblock %}
 
 {% block head_scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -24,8 +25,8 @@
 <!-- Stats Grid -->
 <section class="card card-accent" id="driver-stats-section">
     <div class="card-header">
-        <h2 class="card-title"><span class="card-title-icon">📊</span> {{ season }} Season Stats</h2>
-        <a href="/compare?d1={{ driver.driver_code }}" class="card-link">Compare ⚔️</a>
+        <h2 class="card-title">{{ season }} season</h2>
+        <a href="/compare?d1={{ driver.driver_code }}" class="card-link">Compare</a>
     </div>
     <div class="stats-grid">
         <div class="stat-card">
@@ -67,7 +68,7 @@
 {% if points_history %}
 <section class="card" id="points-progression-section">
     <div class="card-header">
-        <h2 class="card-title">📈 Points Progression</h2>
+        <h2 class="card-title">Points climb</h2>
     </div>
     <div class="chart-container">
         <canvas id="pointsProgressionChart" height="250"></canvas>
@@ -79,7 +80,7 @@
 {% if race_results %}
 <section class="card" id="driver-results-section">
     <div class="card-header">
-        <h2 class="card-title">🏁 Race-by-Race Results</h2>
+        <h2 class="card-title">Race by race</h2>
     </div>
     <div class="table-wrapper">
         <table class="data-table" id="driver-results-table">

@@ -36,9 +36,16 @@ def _validate_column(col):
 
 def get_connection():
     """Get a connection to the SQLite database."""
-    conn = sqlite3.connect(DB_PATH)
+    # timeout= makes sqlite3 retry internally for up to 30s instead of
+    # raising "database is locked" immediately on a concurrent writer.
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # Belt-and-braces: busy_timeout backs the same retry behaviour at the
+    # SQLite level, which matters once WAL readers/writers overlap under
+    # Flask's multi-threaded request handling.
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -238,7 +245,6 @@ def init_db():
             fetched_at TIMESTAMP,
             PRIMARY KEY (session_key, driver_number, stint_number)
         );
-
         -- Track outline cache (circuit shape per session)
         CREATE TABLE IF NOT EXISTS track_outlines (
             session_key INTEGER,
@@ -246,11 +252,15 @@ def init_db():
             y REAL,
             fetched_at TIMESTAMP
         );
+
+        -- Performance Indexes
+        CREATE INDEX IF NOT EXISTS idx_results_season_round ON results(season, round);
+        CREATE INDEX IF NOT EXISTS idx_lap_times_lookup ON lap_times(season, round, driver_code);
+        CREATE INDEX IF NOT EXISTS idx_openf1_laps_session ON openf1_laps(session_key, driver_number);
     """)
 
     conn.commit()
     conn.close()
-
 
 def is_stale(fetched_at_str, max_age_hours=1):
     """Check if cached data is stale based on age."""
@@ -276,6 +286,9 @@ def get_cached(table, filters, max_age_hours=1):
         max_age_hours: Maximum age in hours before data is considered stale
     """
     _validate_table(table)
+
+    if not filters:
+        raise ValueError("get_cached requires at least one filter to avoid a full-table scan")
 
     where_parts = []
     values = []

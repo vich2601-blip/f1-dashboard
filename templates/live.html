@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Live Timing — {{ session_info.circuit_short_name if session_info else 'F1' }}{% endblock %}
+{% block title %}Live Timing — {{ session_info.circuit_short_name if session_info else 'Apex' }}{% endblock %}
 {% block meta_description %}Live F1 timing with circuit map, sector times, intervals, and race control.{% endblock %}
+{% block body_class %}live-mode{% endblock %}
+{% block topbar_label %}Live timing{% endblock %}
 
 {% block content %}
 <div class="live-page">
@@ -36,6 +38,12 @@
                 <span class="session-circuit">{{ session_info.circuit_short_name }}</span>
             </div>
             {% endif %}
+            {% if data_source_label %}
+            <div class="data-source-badge" title="Data provided by {{ data_source_label }}">
+                <span class="data-source-icon">📡</span>
+                <span class="data-source-text mono">{{ data_source_label }}</span>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -44,9 +52,9 @@
     <div class="fallback-banner" id="fallback-banner">
         <div class="fallback-icon">📡</div>
         <div class="fallback-text">
-            <strong>{{ requested_year }} live data is not yet available on OpenF1.</strong>
+            <strong>{{ requested_year }} live data is not yet available.</strong>
             Showing the latest session data from <strong>{{ fallback_year }}</strong> instead.
-            Data will appear automatically once OpenF1 adds {{ requested_year }} sessions.
+            Data will appear automatically once {{ requested_year }} sessions are available.
         </div>
     </div>
     {% endif %}
@@ -58,6 +66,7 @@
         <div class="live-panel timing-tower" id="timing-tower">
             <div class="panel-header">
                 <h2 class="panel-title">Timing Tower</h2>
+                <span class="panel-badge mono live-update-indicator" id="tower-update-tick">⚡ LIVE</span>
             </div>
             <div class="tower-list" id="tower-list">
                 {% for pos in positions %}
@@ -65,7 +74,7 @@
                 {% set driver = driver_map.get(dn, {}) %}
                 {% set lap = latest_laps.get(dn, {}) %}
                 {% set stint = latest_stints.get(dn, {}) %}
-                <div class="tower-row" id="tower-row-{{ dn }}" style="--delay: {{ loop.index * 0.03 }}s">
+                <div class="tower-row" id="tower-row-{{ dn }}" data-driver="{{ dn }}" data-acronym="{{ driver.name_acronym or dn }}" style="--delay: {{ loop.index * 0.03 }}s" onclick="selectDriver({{ dn }})">
                     <div class="tower-pos">
                         <span class="tower-pos-num mono {% if loop.index <= 3 %}tower-pos-podium{% endif %}">{{ pos.position }}</span>
                     </div>
@@ -109,55 +118,146 @@
             </div>
         </div>
 
-        <!-- CENTER: Circuit Map -->
-        <div class="live-panel circuit-map-panel" id="circuit-map-panel">
-            <div class="panel-header">
-                <h2 class="panel-title">Circuit Map</h2>
-                {% if session_info %}
-                <span class="panel-badge mono">{{ session_info.circuit_short_name }}</span>
-                {% endif %}
-            </div>
-            <div class="circuit-map-container" id="circuit-map-container">
-                <canvas id="circuit-canvas" width="800" height="600"></canvas>
-                {% if not track_outline %}
-                <div class="map-empty-overlay">
-                    <span class="empty-icon">🗺️</span>
-                    <p>No location data available for this session</p>
+        <!-- CENTER: Circuit Map + Speed Trace -->
+        <div class="live-center-col">
+            <div class="live-panel circuit-map-panel" id="circuit-map-panel">
+                <div class="panel-header">
+                    <h2 class="panel-title">Circuit Map</h2>
+                    {% if session_info %}
+                    <span class="panel-badge mono">{{ session_info.circuit_short_name }}</span>
+                    {% endif %}
                 </div>
-                {% endif %}
+                <div class="circuit-map-container" id="circuit-map-container">
+                    <canvas id="circuit-canvas" width="800" height="600"></canvas>
+                    {% if not track_outline %}
+                    <div class="map-empty-overlay">
+                        <span class="empty-icon">🗺️</span>
+                        <p>No location data available for this session</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Speed Trace Panel (shows when a driver is selected) -->
+            <div class="live-panel speed-trace-panel" id="speed-trace-panel" style="display: none;">
+                <div class="panel-header">
+                    <h2 class="panel-title" id="speed-trace-title">Speed Trace</h2>
+                    <button class="panel-close-btn" onclick="closeSpeedTrace()" title="Close">&times;</button>
+                </div>
+                <div class="speed-trace-container">
+                    <canvas id="speed-trace-canvas" width="800" height="200"></canvas>
+                </div>
+                <div class="telemetry-bars" id="telemetry-bars">
+                    <div class="telemetry-bar-group">
+                        <label class="telemetry-bar-label mono">THROTTLE</label>
+                        <div class="telemetry-bar-track">
+                            <div class="telemetry-bar-fill throttle-bar" id="throttle-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="telemetry-bar-value mono" id="throttle-value">0%</span>
+                    </div>
+                    <div class="telemetry-bar-group">
+                        <label class="telemetry-bar-label mono">BRAKE</label>
+                        <div class="telemetry-bar-track">
+                            <div class="telemetry-bar-fill brake-bar" id="brake-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="telemetry-bar-value mono" id="brake-value">0%</span>
+                    </div>
+                    <div class="telemetry-bar-group">
+                        <label class="telemetry-bar-label mono">GEAR</label>
+                        <div class="gear-indicator" id="gear-indicator">
+                            <span class="gear-num mono" id="gear-num">N</span>
+                        </div>
+                    </div>
+                    <div class="telemetry-bar-group">
+                        <label class="telemetry-bar-label mono">DRS</label>
+                        <div class="drs-indicator" id="drs-indicator">
+                            <span class="drs-status mono" id="drs-status">OFF</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- RIGHT: Info Panel -->
         <div class="live-panel info-panel" id="info-panel">
+            <!-- Driver Detail Card (shows when a driver is selected) -->
+            <div class="info-card driver-detail-card" id="driver-detail-card" style="display: none;">
+                <div class="driver-detail-header" id="driver-detail-header">
+                    <div class="driver-detail-team-bar" id="driver-detail-team-bar"></div>
+                    <div class="driver-detail-info">
+                        <span class="driver-detail-code mono" id="driver-detail-code">---</span>
+                        <span class="driver-detail-team" id="driver-detail-team">---</span>
+                    </div>
+                    <button class="driver-detail-close" onclick="deselectDriver()" title="Close">&times;</button>
+                </div>
+                <div class="driver-detail-stats" id="driver-detail-stats">
+                    <div class="driver-stat">
+                        <span class="driver-stat-label">Position</span>
+                        <span class="driver-stat-value mono" id="detail-position">—</span>
+                    </div>
+                    <div class="driver-stat">
+                        <span class="driver-stat-label">Last Lap</span>
+                        <span class="driver-stat-value mono" id="detail-last-lap">—</span>
+                    </div>
+                    <div class="driver-stat">
+                        <span class="driver-stat-label">Best Lap</span>
+                        <span class="driver-stat-value mono" id="detail-best-lap">—</span>
+                    </div>
+                    <div class="driver-stat">
+                        <span class="driver-stat-label">Gap to Leader</span>
+                        <span class="driver-stat-value mono" id="detail-gap">—</span>
+                    </div>
+                    <div class="driver-stat">
+                        <span class="driver-stat-label">Tyre</span>
+                        <span class="driver-stat-value" id="detail-tyre">
+                            <span class="tyre-dot" id="detail-tyre-dot"></span>
+                            <span class="mono" id="detail-tyre-compound">—</span>
+                        </span>
+                    </div>
+                    <div class="driver-stat">
+                        <span class="driver-stat-label">Tyre Age</span>
+                        <span class="driver-stat-value mono" id="detail-tyre-age">—</span>
+                    </div>
+                </div>
+                <!-- Speed Gauge -->
+                <div class="speed-gauge-container">
+                    <svg class="speed-gauge" viewBox="0 0 200 120" id="speed-gauge-svg">
+                        <path class="gauge-bg" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="12" stroke-linecap="round"/>
+                        <path class="gauge-fill" id="gauge-fill" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#22c55e" stroke-width="12" stroke-linecap="round" stroke-dasharray="0 251.2"/>
+                        <text class="gauge-speed mono" id="gauge-speed" x="100" y="90" text-anchor="middle" fill="white" font-size="28" font-weight="700">0</text>
+                        <text class="gauge-unit mono" x="100" y="108" text-anchor="middle" fill="rgba(255,255,255,0.5)" font-size="10">KM/H</text>
+                    </svg>
+                </div>
+            </div>
+
             <!-- Weather Widget -->
             <div class="info-card weather-card" id="weather-card">
-                <h3 class="info-card-title">🌤️ Weather</h3>
+                <h3 class="info-card-title">Weather</h3>
                 {% if weather %}
                 <div class="weather-grid">
                     <div class="weather-item">
                         <span class="weather-label">Track</span>
-                        <span class="weather-value mono">{{ "%.1f"|format(weather.track_temperature) if weather.track_temperature else '—' }}°C</span>
+                        <span class="weather-value mono" id="weather-track">{{ "%.1f"|format(weather.track_temperature) if weather.track_temperature else '—' }}°C</span>
                     </div>
                     <div class="weather-item">
                         <span class="weather-label">Air</span>
-                        <span class="weather-value mono">{{ "%.1f"|format(weather.air_temperature) if weather.air_temperature else '—' }}°C</span>
+                        <span class="weather-value mono" id="weather-air">{{ "%.1f"|format(weather.air_temperature) if weather.air_temperature else '—' }}°C</span>
                     </div>
                     <div class="weather-item">
                         <span class="weather-label">Humidity</span>
-                        <span class="weather-value mono">{{ "%.0f"|format(weather.humidity) if weather.humidity else '—' }}%</span>
+                        <span class="weather-value mono" id="weather-humidity">{{ "%.0f"|format(weather.humidity) if weather.humidity else '—' }}%</span>
                     </div>
                     <div class="weather-item">
                         <span class="weather-label">Wind</span>
-                        <span class="weather-value mono">{{ "%.1f"|format(weather.wind_speed) if weather.wind_speed else '—' }} km/h</span>
+                        <span class="weather-value mono" id="weather-wind">{{ "%.1f"|format(weather.wind_speed) if weather.wind_speed else '—' }} km/h</span>
                     </div>
                     <div class="weather-item">
                         <span class="weather-label">Rain</span>
-                        <span class="weather-value mono">{{ 'Yes' if weather.rainfall else 'No' }}</span>
+                        <span class="weather-value mono" id="weather-rain">{{ 'Yes' if weather.rainfall else 'No' }}</span>
                     </div>
                     <div class="weather-item">
                         <span class="weather-label">Pressure</span>
-                        <span class="weather-value mono">{{ "%.1f"|format(weather.pressure) if weather.pressure else '—' }} hPa</span>
+                        <span class="weather-value mono" id="weather-pressure">{{ "%.1f"|format(weather.pressure) if weather.pressure else '—' }} hPa</span>
                     </div>
                 </div>
                 {% else %}
@@ -167,7 +267,7 @@
 
             <!-- Tyre Strategy -->
             <div class="info-card stints-card" id="stints-card">
-                <h3 class="info-card-title">🔧 Tyre Strategy</h3>
+                <h3 class="info-card-title">Tyre strategy</h3>
                 <div class="stint-list">
                     {% for pos in positions[:10] %}
                     {% set dn = pos.driver_number %}
@@ -185,9 +285,17 @@
                 </div>
             </div>
 
+            <!-- Live Predictions -->
+            <div class="info-card live-predictions-card" id="live-predictions-card">
+                <h3 class="info-card-title">Live win odds</h3>
+                <div class="stint-list" id="live-predictions-list">
+                    <p class="info-empty">Loading predictions...</p>
+                </div>
+            </div>
+
             <!-- Race Control -->
             <div class="info-card rc-card" id="race-control-card">
-                <h3 class="info-card-title">🚩 Race Control</h3>
+                <h3 class="info-card-title">Race control</h3>
                 <div class="rc-feed" id="rc-feed">
                     {% for msg in race_control[-10:] | reverse %}
                     <div class="rc-message {% if msg.flag and 'RED' in (msg.flag | upper) %}rc-red{% elif msg.flag and 'YELLOW' in (msg.flag | upper) %}rc-yellow{% elif msg.flag and 'GREEN' in (msg.flag | upper) %}rc-green{% endif %}">
@@ -202,35 +310,25 @@
             </div>
         </div>
     </div>
+
+    <!-- Race Control Toast Container (for pop-up notifications) -->
+    <div class="rc-toast-container" id="rc-toast-container"></div>
+
     {% else %}
     <div class="card empty-card" style="opacity: 1;">
         <div class="empty-state">
             {% if not sessions %}
-            <span class="empty-icon">⚠️</span>
-            <h3>Unable to load sessions</h3>
-            {% if openf1_error %}
-            <p>{{ openf1_error }}</p>
-            {% if not openf1_auth_configured %}
-            <p style="margin-top: var(--space-md);">
-                Set <code>OPENF1_ACCESS_TOKEN</code>, or set both
-                <code>OPENF1_USERNAME</code> and <code>OPENF1_PASSWORD</code>,
-                then restart the app.
-            </p>
-            {% endif %}
-            {% else %}
-            <p>Could not fetch session data from the OpenF1 API. This usually means:</p>
+            <span class="empty-icon">📡</span>
+            <h3>No sessions available</h3>
+            <p>Could not find session data for the selected year. This usually means:</p>
             <ul style="text-align: left; max-width: 400px; margin: var(--space-md) auto; color: var(--text-secondary); font-size: 0.9rem; line-height: 1.8;">
-                <li>The API is temporarily unavailable</li>
-                <li>There's a network connectivity issue</li>
-                <li>No data exists for the selected year</li>
+                <li>The season hasn't started yet</li>
+                <li>There's a temporary network issue</li>
+                <li>The data providers are updating</li>
             </ul>
             <p style="margin-top: var(--space-md);">
-                <strong>Try:</strong> Select a different year (2024 or 2023 have the most data), or check your internet connection and restart the app.
+                <strong>Try:</strong> Select a different year — 2025 and 2024 have the most data available.
             </p>
-            <p style="margin-top: var(--space-sm); font-size: 0.8rem; color: var(--text-muted);">
-                Check your terminal for <code>[API Error]</code> messages for details.
-            </p>
-            {% endif %}
             {% else %}
             <span class="empty-icon">📡</span>
             <h3>Select a session</h3>
@@ -249,16 +347,67 @@
     const SESSION_KEY = {{ session_key }};
     const TRACK_OUTLINE = {{ track_outline | tojson }};
     const DRIVER_MAP = {{ driver_map | tojson }};
+    const SESSION_YEAR = {{ year }};
+    const SESSION_ROUND = {{ session_info.round if session_info else 'null' }};
 
     document.addEventListener('DOMContentLoaded', function() {
         initCircuitMap('circuit-canvas', TRACK_OUTLINE, DRIVER_MAP, SESSION_KEY);
+        initLiveWebSocket(SESSION_KEY, DRIVER_MAP, SESSION_YEAR);
+        
+        // Start polling live predictions
+        setInterval(updateLivePredictions, 15000);
+        setTimeout(updateLivePredictions, 2000);
     });
+
+    async function updateLivePredictions() {
+        if (!SESSION_ROUND) return;
+        const rows = document.querySelectorAll('.tower-row');
+        const live_standings = [];
+        rows.forEach(r => {
+            const drv = r.getAttribute('data-acronym');
+            let posText = r.querySelector('.tower-pos-num').innerText;
+            const pos = parseInt(posText);
+            if (drv && !isNaN(pos)) {
+                live_standings.push({driver_code: drv, position: pos, laps: 0});
+            }
+        });
+        if (live_standings.length === 0) return;
+        
+        try {
+            const resp = await fetch(`/api/predict/live/${SESSION_YEAR}/${SESSION_ROUND}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({live_standings: live_standings})
+            });
+            const data = await resp.json();
+            if (data.predictions) {
+                const list = document.getElementById('live-predictions-list');
+                list.innerHTML = '';
+                data.predictions.slice(0, 5).forEach(p => {
+                    list.insertAdjacentHTML('beforeend',
+                        `<div class="stint-row">
+                            <span class="stint-driver mono" style="font-weight:bold">${p.driver_code}</span>
+                            <span class="stint-age mono" style="color:var(--text-secondary)">P${Math.round(p.predicted_position)}</span>
+                            <span class="stint-compound mono">${(p.win_probability * 100).toFixed(1)}%</span>
+                        </div>`
+                    );
+                });
+            }
+        } catch (e) {
+            console.error("Live predictions error", e);
+        }
+    }
 </script>
 {% elif session_key %}
 <script>
     const SESSION_KEY = {{ session_key }};
     const TRACK_OUTLINE = [];
     const DRIVER_MAP = {{ driver_map | tojson }};
+    const SESSION_YEAR = {{ year }};
+
+    document.addEventListener('DOMContentLoaded', function() {
+        initLiveWebSocket(SESSION_KEY, DRIVER_MAP, SESSION_YEAR);
+    });
 </script>
 {% endif %}
 {% endblock %}

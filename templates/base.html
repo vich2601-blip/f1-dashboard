@@ -3,47 +3,99 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}F1 Dashboard{% endblock %}</title>
-    <meta name="description" content="{% block meta_description %}Live Formula 1 dashboard with real-time standings, race results, and season calendar.{% endblock %}">
+    <title>{% block title %}Apex — Grand Prix Control{% endblock %}</title>
+    <meta name="description" content="{% block meta_description %}Live Formula 1 control room: standings, live timing, telemetry, and race predictions.{% endblock %}">
 
-    <!-- PWA & Mobile -->
-    <meta name="theme-color" content="#15151e">
+    <meta name="theme-color" content="#050607">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="F1 Dashboard">
+    <meta name="apple-mobile-web-app-title" content="Apex">
 
-    <!-- Open Graph -->
     <meta property="og:type" content="website">
-    <meta property="og:title" content="{% block og_title %}F1 Dashboard{% endblock %}">
-    <meta property="og:description" content="Live Formula 1 dashboard with championship standings, race results, and season calendar.">
+    <meta property="og:title" content="{% block og_title %}Apex — Grand Prix Control{% endblock %}">
+    <meta property="og:description" content="Live Formula 1 control room with championship standings, race results, and session telemetry.">
 
-    <!-- Favicon (inline SVG) -->
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%23e10600'/%3E%3Ctext x='4' y='24' font-family='Arial,sans-serif' font-weight='900' font-size='20' fill='white'%3EF1%3C/text%3E%3C/svg%3E">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050607'/%3E%3Cpath d='M6 22 L14 8 L18 8 L10 22 Z' fill='%23ff2d2d'/%3E%3Cpath d='M16 22 L24 8 L28 8 L20 22 Z' fill='%23f4f1ea'/%3E%3C/svg%3E">
 
-    <!-- Fonts: Titillium Web (official F1 website font) + JetBrains Mono for timing data -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 
-    <!-- Chart.js — only loaded on pages that need it via block -->
     {% block head_scripts %}{% endblock %}
 
-    <!-- Styles -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 </head>
-<body>
-    <!-- F1 Red Top Stripe -->
-    <div class="f1-top-stripe"></div>
+<body class="{% block body_class %}{% endblock %}">
+    <a class="skip-link" href="#main-content">Skip to content</a>
 
-    {% include 'components/navbar.html' %}
+    <div class="app-frame">
+        {% include 'components/navbar.html' %}
 
-    <main class="main-content">
-        {% block content %}{% endblock %}
-    </main>
+        <div class="app-stage">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false" aria-controls="nav-links">
+                        <span class="hamburger"></span>
+                    </button>
+                    <div class="topbar-kicker">
+                        <span class="eyebrow">Season {{ app_season }}</span>
+                        <span class="topbar-page">{% block topbar_label %}Control room{% endblock %}</span>
+                    </div>
+                </div>
+                <div class="topbar-actions">
+                    <button type="button" class="cmd-trigger" id="cmd-trigger" aria-haspopup="dialog">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                        <span>Search</span>
+                        <kbd>⌘K</kbd>
+                    </button>
+                    <div class="ws-status" id="ws-status" title="WebSocket disconnected">
+                        <span class="ws-dot" id="ws-dot"></span>
+                        <span class="ws-label mono" id="ws-label">OFFLINE</span>
+                    </div>
+                </div>
+            </header>
 
-    {% include 'components/footer.html' %}
+            <main class="main-content" id="main-content">
+                {% block content %}{% endblock %}
+            </main>
 
+            {% include 'components/footer.html' %}
+        </div>
+    </div>
+
+    <nav class="mobile-dock" aria-label="Primary">
+        <a href="/" class="{% if request.path == '/' %}active{% endif %}">Home</a>
+        <a href="/live" class="{% if request.path == '/live' %}active{% endif %}"><span class="live-dot"></span>Live</a>
+        <a href="/calendar" class="{% if request.path == '/calendar' %}active{% endif %}">Calendar</a>
+        <a href="/standings" class="{% if request.path == '/standings' %}active{% endif %}">Grid</a>
+        <a href="/predict" class="{% if request.path == '/predict' %}active{% endif %}">AI</a>
+    </nav>
+
+    <div class="cmd-overlay" id="cmd-overlay" hidden>
+        <div class="cmd-palette" role="dialog" aria-modal="true" aria-labelledby="cmd-title">
+            <h2 id="cmd-title" class="sr-only">Jump to</h2>
+            <input type="search" id="cmd-input" class="cmd-input" placeholder="Jump to a driver, race, or page…" autocomplete="off">
+            <ul class="cmd-results" id="cmd-results"></ul>
+            <p class="cmd-hint">↑↓ navigate · ↵ open · esc close</p>
+        </div>
+    </div>
+
+    <script id="search-index" type="application/json">{{ {
+        "season": app_season,
+        "drivers": search_drivers,
+        "races": search_races
+    } | tojson }}</script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register("{{ url_for('static', filename='js/sw.js') }}")
+                    .catch(function () {});
+            });
+        }
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

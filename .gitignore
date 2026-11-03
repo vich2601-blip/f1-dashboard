@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Environment variables
+.env
+
+# SQLite cache (auto-generated)
+f1_cache.db
+
+# FastF1 disk cache (auto-generated)
+fastf1_cache/
+
+# ML model artifacts (auto-generated)
+win_predictor.joblib
+catboost_info/
+
+# Byte-compiled / optimized
+*.so
+

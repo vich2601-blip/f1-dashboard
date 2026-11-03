@@ -1,45 +1,51 @@
 {% extends "base.html" %}
 
-{% block title %}{{ season }} F1 Calendar — Race Schedule{% endblock %}
+{% block title %}{{ season }} Calendar — Apex{% endblock %}
 {% block meta_description %}Full {{ season }} Formula 1 race calendar with circuit information and session dates.{% endblock %}
+{% block topbar_label %}Calendar{% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1 class="page-title">{{ season }} Race Calendar</h1>
-    <p class="page-subtitle">{{ schedule | length }} Grands Prix across the season</p>
+    <p class="eyebrow">{{ season }} World Championship</p>
+    <h1 class="page-title">Race calendar</h1>
+    <p class="page-subtitle">{{ schedule | length }} Grands Prix · tap a round for results, quali, and telemetry</p>
+</div>
+
+<div class="calendar-legend">
+    <span><i class="legend-dot done"></i> Complete</span>
+    <span><i class="legend-dot next"></i> Next</span>
+    <span><i class="legend-dot soon"></i> Upcoming</span>
 </div>
 
 <div class="calendar-grid" id="calendar-grid">
     {% for race in schedule %}
-    {% set race_date_str = race.date + "T" + (race.time if race.time else "14:00:00Z") %}
     {% set is_completed = (race.round < next_round) if next_round else true %}
     {% set is_next = race.round == next_round %}
-    
-    <a href="/race/{{ season }}/{{ race.round }}" 
-       class="race-card {% if is_next %}race-card-next{% elif is_completed %}race-card-completed{% else %}race-card-upcoming{% endif %}" 
+
+    <a href="/race/{{ season }}/{{ race.round }}"
+       class="race-card {% if is_next %}race-card-next{% elif is_completed %}race-card-completed{% else %}race-card-upcoming{% endif %}"
        id="race-card-{{ race.round }}"
-       style="--delay: {{ loop.index * 0.03 }}s">
-        
+       style="--delay: {{ loop.index * 0.02 }}s">
+
         <div class="race-card-top">
-            <span class="race-round mono">R{{ race.round }}</span>
+            <span class="race-round mono">R{{ '%02d'|format(race.round) }}</span>
             {% if is_completed %}
-            <span class="race-status completed">✅</span>
+            <span class="race-status completed">Done</span>
             {% elif is_next %}
-            <span class="race-status next pulse">🏁</span>
+            <span class="race-status next pulse">Next</span>
             {% else %}
-            <span class="race-status upcoming">📅</span>
+            <span class="race-status upcoming">Soon</span>
             {% endif %}
         </div>
 
         <div class="race-card-flag">{{ get_flag(race.country) }}</div>
-
         <h3 class="race-card-name">{{ race.race_name }}</h3>
         <p class="race-card-circuit">{{ race.circuit_name }}</p>
         <p class="race-card-location">{{ race.locality }}, {{ race.country }}</p>
         <p class="race-card-date mono">{{ race.date }}</p>
 
         {% if race.has_sprint %}
-        <span class="badge badge-sprint-small">⚡ Sprint</span>
+        <span class="badge badge-sprint-small">Sprint</span>
         {% endif %}
 
         {% if is_next %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} — {{ title }}{% endblock %}
+{% block topbar_label %}System{% endblock %}
+{% block content %}
+<section class="error-panel">
+    <p class="eyebrow">{{ code }}</p>
+    <h1 class="page-title">{{ title }}</h1>
+    <p class="page-subtitle">{{ message }}</p>
+    <a class="compare-btn" href="/">Back to overview</a>
+</section>
+{% endblock %}

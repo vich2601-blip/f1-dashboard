@@ -1,27 +1,30 @@
-<nav class="navbar" id="main-nav">
+<nav class="navbar" id="main-nav" aria-label="Main">
     <div class="nav-container">
         <a href="/" class="nav-logo" id="nav-logo">
-            <!-- Official F1 Speed-Mark Logo SVG -->
-            <svg viewBox="0 0 80 32" xmlns="http://www.w3.org/2000/svg" fill="none">
-                <path d="M2.9 0H27.8L25.1 8.4H14.2L13.3 11.2H23.1L20.7 18.8H10.9L8.2 27.2H15.1L12.4 35.6H0L2.9 0Z" fill="#e10600" transform="scale(0.85) translate(2, -1)"/>
-                <path d="M30.6 0H38.8L29.8 30.4H21.6L30.6 0Z" fill="#e10600" transform="scale(0.85) translate(2, -1)"/>
-                <path d="M52 0C60.4 0 64.8 4.8 62.8 11.6L58.4 26.4C56.4 33.2 49.6 38 41.2 38C32.8 38 28.4 33.2 30.4 26.4L34.8 11.6C36.8 4.8 43.6 0 52 0ZM47.2 8.4L43.6 20.8C42.8 23.6 44.4 25.6 47.6 25.6C50.8 25.6 53.6 23.6 54.4 20.8L58 8.4C58.8 5.6 57.2 3.6 54 3.6C50.8 3.6 48 5.6 47.2 8.4Z" fill="#e10600" transform="scale(0.55) translate(38, 2)"/>
-            </svg>
-            <span class="logo-text">Dashboard</span>
+            <span class="logo-mark" aria-hidden="true">
+                <span class="logo-chevron"></span>
+                <span class="logo-chevron logo-chevron-late"></span>
+            </span>
+            <span class="logo-copy">
+                <span class="logo-text">Apex</span>
+                <span class="logo-sub">GP Control</span>
+            </span>
         </a>
-        <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation">
-            <span class="hamburger"></span>
-        </button>
         <ul class="nav-links" id="nav-links">
-            <li><a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}" id="nav-dashboard">Dashboard</a></li>
+            <li><a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}" id="nav-dashboard">Overview</a></li>
             <li>
                 <a href="/live" class="nav-link {% if request.path == '/live' %}active{% endif %}" id="nav-live">
-                    <span class="live-dot"></span> Live
+                    <span class="live-dot"></span> Live timing
                 </a>
             </li>
             <li><a href="/calendar" class="nav-link {% if request.path == '/calendar' %}active{% endif %}" id="nav-calendar">Calendar</a></li>
             <li><a href="/standings" class="nav-link {% if request.path == '/standings' %}active{% endif %}" id="nav-standings">Standings</a></li>
             <li><a href="/compare" class="nav-link {% if request.path == '/compare' %}active{% endif %}" id="nav-compare">Compare</a></li>
+            <li><a href="/predict" class="nav-link {% if request.path == '/predict' %}active{% endif %}" id="nav-predict">Predictor</a></li>
         </ul>
+        <div class="nav-footnote">
+            <span class="mono">{{ app_season }}</span>
+            Independent fan dashboard. Not affiliated with Formula 1.
+        </div>
     </div>
 </nav>

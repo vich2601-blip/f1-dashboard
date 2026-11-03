@@ -1,0 +1,534 @@
+{% extends "base.html" %}
+{% block title %}Race Predictor — {{ next_race.race_name if next_race else 'Apex' }}{% endblock %}
+{% block topbar_label %}Predictor{% endblock %}
+{% block meta_description %}AI-powered F1 race win probability predictions using XGBoost+LightGBM+CatBoost stacking ensemble with Elo ratings, circuit history, SHAP explainability, and 8 seasons of training data.{% endblock %}
+{% block head_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="predict-page">
+
+  <!-- Hero -->
+  <div class="predict-hero">
+    <div class="predict-badge">STACKING ENSEMBLE · 30 FEATURES · 8 SEASONS</div>
+    <h1 class="predict-title">Race win predictor</h1>
+    <p class="predict-subtitle">
+      World-class stacking ensemble: XGBoost + LightGBM + CatBoost trained on 8 seasons of F1 data
+      with Elo ratings, circuit history, SHAP explainability, and isotonic probability calibration.
+    </p>
+    {% if next_race %}
+    <div class="predict-race-info">
+      <span class="predict-race-flag">{{ get_flag(next_race.country) }}</span>
+      <span class="predict-race-name">{{ next_race.race_name }}</span>
+      <span class="predict-race-round mono">Round {{ next_race.round }}</span>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Model Info Card -->
+  <div class="model-info-card" id="model-info-card">
+    <div class="model-info-grid">
+      <div class="model-stat">
+        <div class="model-stat-icon">&#x1F9E0;</div>
+        <div class="model-stat-label">Architecture</div>
+        <div class="model-stat-value" id="mi-arch">XGB + LGB + CB Stack</div>
+      </div>
+      <div class="model-stat">
+        <div class="model-stat-icon">&#x1F4C5;</div>
+        <div class="model-stat-label">Training Seasons</div>
+        <div class="model-stat-value" id="mi-seasons">8 seasons</div>
+      </div>
+      <div class="model-stat">
+        <div class="model-stat-icon">&#x1F4CA;</div>
+        <div class="model-stat-label">Training Rows</div>
+        <div class="model-stat-value" id="mi-rows">—</div>
+      </div>
+      <div class="model-stat">
+        <div class="model-stat-icon">&#x1F3AF;</div>
+        <div class="model-stat-label">OOF MAE</div>
+        <div class="model-stat-value" id="mi-mae">— positions</div>
+      </div>
+      <div class="model-stat">
+        <div class="model-stat-icon">&#x2728;</div>
+        <div class="model-stat-label">Features</div>
+        <div class="model-stat-value">30</div>
+      </div>
+      <div class="model-stat">
+        <div class="model-stat-icon">&#x1F550;</div>
+        <div class="model-stat-label">Trained At</div>
+        <div class="model-stat-value" id="mi-trained">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feature legend -->
+  <div class="feature-legend">
+    <span class="feat-pill" title="Seconds behind pole time in best qualifying session">&#x23F1; Q Gap</span>
+    <span class="feat-pill" title="Driver qualifying pos relative to teammate (negative = faster)">&#x1F3CE; vs Teammate</span>
+    <span class="feat-pill" title="Driver average finish and improvement trend">&#x1F4C8; Driver Form</span>
+    <span class="feat-pill" title="Form consistency: std-dev of last 5 finishes">&#x1F4D0; Consistency</span>
+    <span class="feat-pill" title="Fraction of last 10 races ending in DNF/DSQ/DNS">&#x274C; DNF Rate</span>
+    <span class="feat-pill" title="Accident/collision fraction — yellow &amp; red flag risk">&#x1F6A9; Incident %</span>
+    <span class="feat-pill" title="Elo rating computed from all-time race outcomes">&#x1F3C6; Elo Rating</span>
+    <span class="feat-pill" title="Constructor car reliability (DNF rate) and outright pace (win rate)">&#x1F527; Car Reliability</span>
+    <span class="feat-pill" title="Driver and constructor win/podium rate at THIS specific circuit">&#x1F3CE; Circuit History</span>
+    <span class="feat-pill" title="Championship position and gap to leader">&#x1F3C6; Championship</span>
+    <span class="feat-pill" title="Home race bonus: driver nationality matches circuit country">&#x1F3E0; Home Race</span>
+  </div>
+
+  <!-- Loading / Error / Results -->
+  <div id="predict-loading" class="predict-loading">
+    <div class="loading-ring">
+      <div class="loading-car">&#x1F3CE;</div>
+    </div>
+    <p class="loading-text">Running 30-feature stacking ensemble&hellip;</p>
+    <p class="loading-sub">XGBoost + LightGBM + CatBoost + SHAP analysis</p>
+  </div>
+  <div id="predict-error" class="predict-error hidden">
+    <span class="error-icon">&#x26A0;&#xFE0F;</span>
+    <p id="predict-error-msg">Unable to generate predictions.</p>
+    <p class="error-hint">The model needs completed race data to train on. Check back after the season&rsquo;s first race.</p>
+  </div>
+  <div id="predict-results" class="predict-results hidden">
+
+    <!-- Win probability chart -->
+    <section class="card predict-chart-card">
+      <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">&#x1F4CA;</span> Win Probability &mdash; Top 10</h2>
+        <span class="mono predict-meta" id="predict-meta"></span>
+      </div>
+      <div style="position:relative;height:340px;"><canvas id="predict-chart"></canvas></div>
+    </section>
+
+    <!-- Full driver comparison table -->
+    <section class="card predict-table-card">
+      <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">&#x1F3C6;</span> Driver &amp; Car Comparison</h2>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <button class="btn-outline-sm" id="btn-toggle-shap" onclick="toggleShapMode()">&#x1F52C; Show SHAP</button>
+          <button class="btn-retrain" id="btn-retrain" onclick="retrain()">&#x21BB; Retrain Model</button>
+        </div>
+      </div>
+      <div class="predict-table-wrap">
+        <table class="predict-table" id="main-table">
+          <thead>
+            <tr id="table-header">
+              <th>#</th>
+              <th>Driver</th>
+              <th>Win %</th>
+              <th title="Seconds behind pole time">Q Gap</th>
+              <th title="Qualifying position vs teammate (negative = faster)">vs TM</th>
+              <th title="Driver Elo rating (all-time form)">Elo</th>
+              <th title="Driver DNF rate — last 10 races">DNF %</th>
+              <th title="Accident/collision rate — flag-risk">Incident</th>
+              <th title="Constructor car DNF rate (reliability)">Car DNF</th>
+              <th title="Constructor win rate (car pace)">Car Win</th>
+              <th title="Driver avg finish at this circuit">Circ Avg</th>
+              <th title="Driver win rate at this circuit">Circ Win</th>
+              <th title="Ensemble model breakdown (XGB/LGB/CB predicted position)">Ensemble</th>
+            </tr>
+          </thead>
+          <tbody id="predict-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SHAP Panel (hidden by default) -->
+    <section class="card shap-panel hidden" id="shap-panel">
+      <div class="card-header">
+        <h2 class="card-title"><span class="card-title-icon">&#x1F52C;</span> SHAP Feature Importance</h2>
+        <span class="shap-driver-label" id="shap-driver-label">Click a driver row to inspect</span>
+      </div>
+      <p class="shap-hint">SHAP values show which features pushed the model toward or away from a winning prediction for the selected driver. Positive values (red) increase predicted position (worse). Negative values (green) decrease it (better).</p>
+      <div id="shap-chart-wrap" style="position:relative;height:320px;">
+        <canvas id="shap-chart"></canvas>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<style>
+.predict-page{max-width:1400px;margin:0 auto;padding:var(--space-lg) var(--space-md)}
+
+/* Hero */
+.predict-hero{background:linear-gradient(135deg,#0d0d1a 0%,#1a0a1a 40%,#0a0d1a 100%);border:1px solid rgba(225,6,0,.3);border-radius:var(--radius-lg);padding:var(--space-xl) var(--space-lg);margin-bottom:var(--space-md);text-align:center;position:relative;overflow:hidden}
+.predict-hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% -10%,rgba(225,6,0,.15) 0%,transparent 60%);pointer-events:none}
+.predict-badge{display:inline-block;background:rgba(225,6,0,.12);border:1px solid rgba(225,6,0,.5);color:var(--f1-red);font-size:.68rem;font-weight:700;letter-spacing:.13em;padding:5px 16px;border-radius:20px;margin-bottom:var(--space-sm);animation:pulse-badge 3s ease-in-out infinite}
+@keyframes pulse-badge{0%,100%{box-shadow:0 0 0 0 rgba(225,6,0,.4)}50%{box-shadow:0 0 0 6px rgba(225,6,0,0)}}
+.predict-title{font-size:2.2rem;font-weight:900;margin-bottom:var(--space-xs);background:linear-gradient(135deg,#fff 0%,#ffcdd2 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.predict-subtitle{color:var(--text-secondary);font-size:.92rem;max-width:680px;margin:0 auto var(--space-md)}
+.predict-race-info{display:flex;align-items:center;gap:var(--space-sm);justify-content:center;flex-wrap:wrap}
+.predict-race-flag{font-size:1.6rem}.predict-race-name{font-size:1.1rem;font-weight:700}
+.predict-race-round{font-size:.8rem;color:var(--text-muted);background:rgba(255,255,255,.06);padding:3px 8px;border-radius:4px}
+
+/* Model Info Card */
+.model-info-card{background:linear-gradient(135deg,rgba(54,113,198,.08),rgba(54,113,198,.03));border:1px solid rgba(54,113,198,.2);border-radius:var(--radius-md);padding:var(--space-md);margin-bottom:var(--space-md)}
+.model-info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--space-md)}
+.model-stat{text-align:center}
+.model-stat-icon{font-size:1.4rem;margin-bottom:4px}
+.model-stat-label{font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px}
+.model-stat-value{font-size:.9rem;font-weight:700;color:#7aabff}
+
+/* Feature pills */
+.feature-legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-lg)}
+.feat-pill{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:var(--text-secondary);font-size:.74rem;padding:5px 12px;border-radius:20px;cursor:help;transition:all .2s}
+.feat-pill:hover{background:rgba(225,6,0,.15);border-color:rgba(225,6,0,.4);color:var(--f1-red)}
+
+/* Loading */
+.predict-loading{display:flex;flex-direction:column;align-items:center;gap:var(--space-sm);padding:var(--space-xl)}
+.loading-ring{width:64px;height:64px;border:3px solid rgba(225,6,0,.15);border-top-color:var(--f1-red);border-radius:50%;animation:spin .9s linear infinite;display:flex;align-items:center;justify-content:center}
+.loading-car{font-size:1.4rem;animation:spin-rev .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes spin-rev{to{transform:rotate(-360deg)}}
+.loading-text{color:var(--text-secondary);font-weight:600}
+.loading-sub{color:var(--text-muted);font-size:.8rem}
+
+/* Error */
+.predict-error{display:flex;flex-direction:column;align-items:center;gap:var(--space-sm);padding:var(--space-xl);text-align:center}
+.error-icon{font-size:2rem}.error-hint{color:var(--text-muted);font-size:.85rem;max-width:440px}
+
+/* Chart card */
+.predict-chart-card,.predict-table-card{margin-bottom:var(--space-lg)}
+.predict-meta{font-size:.72rem;color:var(--text-muted)}
+
+/* Table */
+.predict-table-wrap{overflow-x:auto}
+.predict-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.predict-table th,.predict-table td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border-color);white-space:nowrap}
+.predict-table th{color:var(--text-muted);font-weight:600;font-size:.7rem;letter-spacing:.07em;text-transform:uppercase;cursor:help}
+.predict-table tbody tr{cursor:pointer;transition:background .15s}
+.predict-table tbody tr:hover{background:rgba(54,113,198,.08)}
+.predict-table tbody tr.shap-active{background:rgba(225,6,0,.08);border-left:3px solid var(--f1-red)}
+
+/* Badges */
+.rank-1{color:#FFD700;font-weight:900}.rank-2{color:#C0C0C0;font-weight:800}.rank-3{color:#CD7F32;font-weight:800}
+.prob-bar-bg{background:rgba(255,255,255,.07);border-radius:4px;height:6px;width:80px;overflow:hidden;display:inline-block;vertical-align:middle;margin-left:6px}
+.prob-bar{height:100%;border-radius:4px;transition:width .7s cubic-bezier(.4,0,.2,1)}
+.driver-cell{display:flex;align-items:center;gap:8px}
+.driver-team-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.risk-badge{display:inline-block;padding:2px 7px;border-radius:12px;font-size:.71rem;font-weight:700}
+.risk-low{background:rgba(39,212,83,.13);color:#27d453}
+.risk-mid{background:rgba(255,170,0,.13);color:#ffaa00}
+.risk-high{background:rgba(225,6,0,.18);color:#ff4444}
+.circ-badge{display:inline-block;padding:2px 7px;border-radius:12px;font-size:.71rem;font-weight:700;background:rgba(54,113,198,.15);color:#7aabff}
+.circ-win-badge{background:rgba(255,215,0,.13);color:#FFD700}
+.elo-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.71rem;font-weight:700}
+.elo-elite{background:rgba(255,215,0,.15);color:#FFD700}
+.elo-strong{background:rgba(39,212,83,.13);color:#27d453}
+.elo-mid{background:rgba(255,255,255,.07);color:#aaa}
+.ensemble-mini{font-size:.68rem;color:var(--text-muted);display:flex;gap:5px;flex-wrap:nowrap}
+.ensemble-tag{padding:1px 5px;border-radius:4px;background:rgba(255,255,255,.06)}
+.home-badge{display:inline-block;padding:1px 6px;border-radius:10px;font-size:.68rem;background:rgba(255,215,0,.12);color:#ffdb70;margin-left:4px}
+
+/* Buttons */
+.btn-retrain{background:rgba(225,6,0,.12);border:1px solid rgba(225,6,0,.3);color:var(--f1-red);padding:7px 14px;border-radius:6px;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-retrain:hover{background:rgba(225,6,0,.25)}
+.btn-retrain:disabled{opacity:.5;cursor:not-allowed}
+.btn-outline-sm{background:rgba(54,113,198,.1);border:1px solid rgba(54,113,198,.3);color:#7aabff;padding:7px 14px;border-radius:6px;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-outline-sm:hover{background:rgba(54,113,198,.2)}
+.btn-outline-sm.active{background:rgba(54,113,198,.25);border-color:#7aabff;color:#fff}
+
+/* SHAP panel */
+.shap-panel{margin-bottom:var(--space-lg)}
+.shap-driver-label{font-size:.85rem;color:var(--f1-red);font-weight:600}
+.shap-hint{font-size:.8rem;color:var(--text-muted);margin-bottom:var(--space-md);max-width:700px}
+
+.hidden{display:none!important}
+</style>
+
+<script>
+const SEASON = {{ season }};
+const ROUND  = {{ next_race.round if next_race else 'null' }};
+let predChart = null;
+let shapChart = null;
+let globalData = null;
+let shapMode = false;
+let activeShapDriver = null;
+
+function hide(id){document.getElementById('predict-'+id).classList.add('hidden')}
+function show(id){document.getElementById('predict-'+id).classList.remove('hidden')}
+
+async function loadPredictions() {
+  if (!ROUND) {
+    hide('loading'); show('error');
+    document.getElementById('predict-error-msg').textContent = 'No upcoming race found.';
+    return;
+  }
+  try {
+    const resp = await fetch('/api/predict/'+SEASON+'/'+ROUND+'?shap=1');
+    const data = await resp.json();
+    hide('loading');
+    if (!resp.ok || data.error) {
+      show('error');
+      document.getElementById('predict-error-msg').textContent = data.error || 'Model unavailable.';
+      return;
+    }
+    globalData = data;
+    renderModelInfo(data);
+    renderResults(data);
+    show('results');
+  } catch(e) {
+    hide('loading'); show('error');
+    document.getElementById('predict-error-msg').textContent = 'Network error: ' + e.message;
+  }
+}
+
+const TC = {
+  'Red Bull':'#3671C6','McLaren':'#FF8000','Ferrari':'#E8002D','Mercedes':'#27F4D2',
+  'Aston Martin':'#229971','Alpine':'#FF87BC','Williams':'#64C4FF','RB':'#6692FF',
+  'Kick Sauber':'#52E252','Haas':'#B6BABD','AlphaTauri':'#6692FF','Alfa Romeo':'#52E252',
+  'Audi':'#F50537','Cadillac':'#D4AF37','Racing Bulls':'#6692FF'
+};
+function col(c){ for(const[k,v]of Object.entries(TC)){if(c&&c.includes(k))return v;} return '#888888'; }
+function risk(v, lo, hi){
+  if(v==null)return'—';
+  const pct=Math.round(v*100);
+  const cls=pct<lo?'risk-low':pct<hi?'risk-mid':'risk-high';
+  return '<span class="risk-badge '+cls+'">'+pct+'%</span>';
+}
+function circ(v){ return '<span class="circ-badge">'+v+'</span>'; }
+function circWin(v){
+  const pct=Math.round(v*100);
+  return pct>0?'<span class="circ-badge circ-win-badge">'+pct+'%</span>':'<span class="circ-badge">0%</span>';
+}
+function eloDisplay(v){
+  if(v==null)return'—';
+  const elo=Math.round(v);
+  const cls=elo>=1600?'elo-elite':elo>=1520?'elo-strong':'elo-mid';
+  return '<span class="elo-badge '+cls+'">'+elo+'</span>';
+}
+
+function renderModelInfo(data) {
+  const seasons = data.training_seasons || [];
+  const seasonsStr = seasons.length > 0 ? seasons[0]+'–'+seasons[seasons.length-1] : '—';
+  document.getElementById('mi-seasons').textContent = seasons.length + ' seasons ('+seasonsStr+')';
+  document.getElementById('mi-rows').textContent = (data.n_training_rows||'—').toLocaleString() + ' entries';
+  document.getElementById('mi-mae').textContent = data.oof_mae ? data.oof_mae.toFixed(2)+' positions' : '—';
+  document.getElementById('mi-trained').textContent = data.model_trained_at ?
+    new Date(data.model_trained_at).toLocaleString([], {dateStyle:'short',timeStyle:'short'}) : '—';
+  document.getElementById('predict-meta').textContent =
+    'Circuit: '+(data.circuit_id||'?')+' | '+(data.feature_count||30)+' features | OOF MAE: '+(data.oof_mae||'?');
+}
+
+function renderResults(data) {
+  const preds = data.predictions;
+  const top10 = preds.slice(0, 10);
+
+  if(predChart) predChart.destroy();
+  predChart = new Chart(document.getElementById('predict-chart'), {
+    type: 'bar',
+    data: {
+      labels: top10.map(p => {
+        let label = p.driver_code || p.driver_name;
+        if(p.home_race) label += ' 🏠';
+        return label;
+      }),
+      datasets: [{
+        label: 'Win %',
+        data: top10.map(p => +(p.win_probability*100).toFixed(2)),
+        backgroundColor: top10.map(p => col(p.constructor)+'BB'),
+        borderColor: top10.map(p => col(p.constructor)),
+        borderWidth: 2,
+        borderRadius: 8,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: {display: false},
+        tooltip: {callbacks: {label: c => ' ' + c.raw + '% calibrated win probability'}}
+      },
+      scales: {
+        x: {grid: {color: 'rgba(255,255,255,.04)'}, ticks: {color: '#aaa', maxRotation: 35}},
+        y: {grid: {color: 'rgba(255,255,255,.04)'}, ticks: {color: '#aaa', callback: v => v+'%'}, beginAtZero: true}
+      },
+      animation: {duration: 800, easing: 'easeOutQuart'}
+    }
+  });
+
+  const tbody = document.getElementById('predict-tbody');
+  tbody.innerHTML = '';
+  preds.forEach((p, i) => {
+    const pct = (p.win_probability*100).toFixed(2);
+    const rc = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'';
+    const c = col(p.constructor);
+    const bw = Math.min(parseFloat(pct)*2.5, 100);
+    const qGap = p.quali_gap_to_pole != null ? '+'+p.quali_gap_to_pole+'s' : '—';
+    const qTM = p.quali_vs_teammate != null ? (p.quali_vs_teammate>0?'+':'')+p.quali_vs_teammate : '—';
+    const qTMcol = p.quali_vs_teammate != null && p.quali_vs_teammate < 0 ? 'color:#27d453' : 'color:#ff6b6b';
+    const cAvg = (p.circuit_driver_avg_finish != null && p.circuit_driver_avg_finish < 10.5)
+      ? circ('P'+Math.round(p.circuit_driver_avg_finish)+' avg')
+      : '<span style="color:var(--text-muted)">new</span>';
+    const cWin = p.circuit_driver_win_rate != null ? circWin(p.circuit_driver_win_rate) : '—';
+
+    // Ensemble breakdown mini
+    const eb = p.ensemble_breakdown || {};
+    const ensembleHtml = `<div class="ensemble-mini">
+      <span class="ensemble-tag" style="color:#ff8c42">XGB:${eb.xgboost!=null?eb.xgboost.toFixed(1):'?'}</span>
+      <span class="ensemble-tag" style="color:#7aabff">LGB:${eb.lightgbm!=null?eb.lightgbm.toFixed(1):'?'}</span>
+      <span class="ensemble-tag" style="color:#b8f5b0">CB:${eb.catboost!=null?eb.catboost.toFixed(1):'?'}</span>
+    </div>`;
+
+    const homeBadge = p.home_race ? '<span class="home-badge">🏠 Home</span>' : '';
+
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-driver', p.driver_code);
+    tr.innerHTML =
+      '<td class="mono '+rc+'">'+(i+1)+'</td>'+
+      '<td><div class="driver-cell"><span class="driver-team-dot" style="background:'+c+'"></span>'+
+        '<span class="mono" style="font-weight:700">'+(p.driver_code||'—')+'</span>'+
+        '<span style="color:var(--text-secondary);font-size:.78rem"> '+(p.driver_name||'')+'</span>'+
+        homeBadge+
+      '</div></td>'+
+      '<td><span class="mono" style="color:'+c+';font-weight:800">'+pct+'%</span>'+
+        '<span class="prob-bar-bg"><span class="prob-bar" style="width:'+bw+'%;background:'+c+'"></span></span></td>'+
+      '<td class="mono" style="color:var(--text-muted)">'+qGap+'</td>'+
+      '<td class="mono" style="'+qTMcol+'">'+qTM+'</td>'+
+      '<td>'+eloDisplay(p.driver_elo)+'</td>'+
+      '<td>'+risk(p.driver_dnf_rate,0.10,0.20)+'</td>'+
+      '<td>'+risk(p.driver_incident_rate,0.05,0.12)+'</td>'+
+      '<td>'+risk(p.constructor_dnf_rate,0.08,0.20)+'</td>'+
+      '<td class="mono" style="color:'+c+';font-weight:600">'+
+        (p.constructor_win_rate!=null?Math.round(p.constructor_win_rate*100)+'%':'—')+'</td>'+
+      '<td>'+cAvg+'</td>'+
+      '<td>'+cWin+'</td>'+
+      '<td>'+ensembleHtml+'</td>';
+
+    tr.addEventListener('click', () => showShapForDriver(p.driver_code));
+    tbody.appendChild(tr);
+  });
+}
+
+function toggleShapMode() {
+  shapMode = !shapMode;
+  const btn = document.getElementById('btn-toggle-shap');
+  const panel = document.getElementById('shap-panel');
+  if (shapMode) {
+    btn.classList.add('active');
+    btn.textContent = '✖ Hide SHAP';
+    panel.classList.remove('hidden');
+    // Auto-show first driver
+    if (globalData && globalData.predictions.length > 0) {
+      showShapForDriver(globalData.predictions[0].driver_code);
+    }
+  } else {
+    btn.classList.remove('active');
+    btn.textContent = '🔬 Show SHAP';
+    panel.classList.add('hidden');
+    // Clear active row
+    document.querySelectorAll('.predict-table tbody tr').forEach(r => r.classList.remove('shap-active'));
+    activeShapDriver = null;
+  }
+}
+
+function showShapForDriver(driverCode) {
+  if (!globalData) return;
+  shapMode = true;
+  const btn = document.getElementById('btn-toggle-shap');
+  btn.classList.add('active');
+  btn.textContent = '✖ Hide SHAP';
+  document.getElementById('shap-panel').classList.remove('hidden');
+
+  // Highlight row
+  document.querySelectorAll('.predict-table tbody tr').forEach(r => {
+    r.classList.toggle('shap-active', r.getAttribute('data-driver') === driverCode);
+  });
+
+  activeShapDriver = driverCode;
+  const shapData = (globalData.shap_by_driver || {})[driverCode] || [];
+  if (shapData.length === 0) {
+    document.getElementById('shap-driver-label').textContent = driverCode + ' — No SHAP data';
+    return;
+  }
+
+  document.getElementById('shap-driver-label').textContent =
+    driverCode + ' — Top 10 Feature Contributions';
+
+  // Find the driver prediction
+  const pred = globalData.predictions.find(p => p.driver_code === driverCode);
+  const tc = pred ? col(pred.constructor) : '#E8002D';
+
+  const labels = shapData.map(f => f.feature.replace(/_/g,' '));
+  const values = shapData.map(f => f.shap_value);
+  const colors = values.map(v => v < 0 ? 'rgba(39,212,83,0.8)' : 'rgba(225,6,0,0.8)');
+  const borders = values.map(v => v < 0 ? '#27d453' : '#E8002D');
+
+  if (shapChart) shapChart.destroy();
+  shapChart = new Chart(document.getElementById('shap-chart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'SHAP Value (impact on predicted position)',
+        data: values,
+        backgroundColor: colors,
+        borderColor: borders,
+        borderWidth: 1.5,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {display: false},
+        tooltip: {
+          callbacks: {
+            label: c => {
+              const feat = shapData[c.dataIndex];
+              const sign = c.raw < 0 ? '↓ better' : '↑ worse';
+              return ` ${c.raw.toFixed(3)} positions (${sign}) | value: ${feat.feature_value.toFixed(3)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: {color: 'rgba(255,255,255,.05)'},
+          ticks: {color: '#aaa'},
+          title: {display: true, text: 'SHAP value (impact on predicted finishing position)', color: '#888', font: {size: 11}}
+        },
+        y: {grid: {color: 'rgba(255,255,255,.03)'}, ticks: {color: '#ccc', font: {size: 11}}}
+      },
+      animation: {duration: 500, easing: 'easeOutQuart'}
+    }
+  });
+}
+
+async function retrain(){
+  const btn = document.getElementById('btn-retrain');
+  btn.disabled = true; btn.textContent = '⟳ Retraining (may take ~5min)...';
+  try {
+    const r = await fetch('/api/predict/retrain', {method: 'POST'});
+    const d = await r.json();
+    if (d.status === 'started') {
+      btn.textContent = '⟳ Training in background...';
+      // Poll for completion every 15s
+      const poll = setInterval(async () => {
+        try {
+          const info = await fetch('/api/predict/model-info');
+          const mi = await info.json();
+          if (mi.loaded && mi.oof_mae > 0) {
+            clearInterval(poll);
+            btn.disabled = false; btn.textContent = '↻ Retrain Model';
+            hide('results'); show('loading');
+            await loadPredictions();
+          }
+        } catch {}
+      }, 15000);
+    } else {
+      alert('Retrain failed: ' + (d.message || 'Unknown'));
+      btn.disabled = false; btn.textContent = '↻ Retrain Model';
+    }
+  } catch(e) {
+    alert('Network error: ' + e.message);
+    btn.disabled = false; btn.textContent = '↻ Retrain Model';
+  }
+}
+
+loadPredictions();
+</script>
+{% endblock %}

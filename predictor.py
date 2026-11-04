@@ -4,7 +4,7 @@ Race Winner Predictor — v5 (Stacking Ensemble: XGBoost + LightGBM + CatBoost)
 Architecture:
   • Base models: XGBoost, LightGBM, CatBoost (each tuned with 50 Optuna trials)
   • Stacking meta-learner: Ridge Regression on OOF predictions
-  • Calibration: Isotonic Regression for reliable win probabilities
+  • Calibration: per-race softmax with a likelihood-fitted temperature
   • Explainability: SHAP values per prediction
   • Training data: 2018–current (8 seasons)
   • Validation: GroupKFold (grouped by season, no data leakage)
@@ -49,6 +49,12 @@ def _import_shap():
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "win_predictor.joblib")
 MODEL_MAX_AGE_HOURS = 12
 DEFAULT_TRAINING_SEASONS = 8   # How many past seasons to use
+# Bump when saved models were trained on data/logic now known to be wrong.
+# v2: full paginated seasons + per-race softmax calibration.
+MODEL_DATA_VERSION = 2
+# Optuna trials per base model. 20 keeps a cold-start train to a few minutes;
+# raise it with PREDICTOR_OPTUNA_TRIALS for a longer, more thorough search.
+DEFAULT_OPTUNA_TRIALS = int(os.environ.get("PREDICTOR_OPTUNA_TRIALS", 20))
 
 # ─── Feature columns ──────────────────────────────────────────────────────────
 FEATURE_COLUMNS = [
@@ -233,7 +239,7 @@ class RacePredictor:
     """
     World-class F1 race predictor using a stacked ensemble of
     XGBoost + LightGBM + CatBoost with OOF cross-validation,
-    isotonic probability calibration, and SHAP explainability.
+    per-race softmax calibration, and SHAP explainability.
     """
 
     def __init__(self, client):
@@ -694,10 +700,11 @@ class RacePredictor:
                         "live_laps_completed": 0,
                         "finishing_position": int(r.get("position", 20)),
                         "_season": season,  # for GroupKFold
+                        "_round": round_num,  # for per-race calibration
                     })
                     season_labels.append(season)
 
-        return pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["finishing_position", "_season"])
+        return pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["finishing_position", "_season", "_round"])
 
     # ══════════════════════════════════════════════════════════════════════════
     # Hyperparameter Optimization (50 trials per model)
@@ -853,7 +860,7 @@ class RacePredictor:
     # Train
     # ══════════════════════════════════════════════════════════════════════════
 
-    def train(self, seasons=None, n_optuna_trials=50):
+    def train(self, seasons=None, n_optuna_trials=DEFAULT_OPTUNA_TRIALS):
         if not self._train_lock.acquire(blocking=False):
             print("[Predictor] Training already in progress, skipping duplicate request.")
             return False
@@ -862,7 +869,7 @@ class RacePredictor:
         finally:
             self._train_lock.release()
 
-    def _do_train(self, seasons=None, n_optuna_trials=50):
+    def _do_train(self, seasons=None, n_optuna_trials=DEFAULT_OPTUNA_TRIALS):
         if seasons is None:
             yr = datetime.now(timezone.utc).year
             n_seasons = DEFAULT_TRAINING_SEASONS
@@ -881,7 +888,6 @@ class RacePredictor:
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_absolute_error
         from sklearn.linear_model import Ridge
-        from sklearn.isotonic import IsotonicRegression
 
         # One held-out season for HPO validation
         unique_seasons = sorted(df["_season"].unique())
@@ -934,17 +940,14 @@ class RacePredictor:
         )
         cb_mod.fit(X, y, verbose=False)
 
-        # ── Isotonic calibration for probabilities ────────────────────────────
-        # Map predicted position to win probability (lower = better)
-        # Calibrate: True label = 1 if winner, 0 otherwise
-        y_winner = (y == 1).astype(float)
-        stacked_preds = meta.predict(oof_preds)
-        # Convert position prediction to 0–1 (smaller pred → higher raw prob)
-        raw_probs = np.exp(-0.4 * (stacked_preds - 1))
-        raw_probs_norm = raw_probs / (raw_probs.sum() + 1e-9)
-        calibrator = IsotonicRegression(out_of_bounds="clip")
-        calibrator.fit(raw_probs_norm, y_winner)
-        print("[Predictor] Probability calibrator fitted.")
+        # ── Win-probability calibration ───────────────────────────────────────
+        # A race has exactly one winner, so probabilities must be normalised
+        # within each race (not across the whole dataset). Fit the softmax
+        # temperature that maximises the likelihood of the actual winners
+        # on out-of-fold predictions.
+        race_ids = df["_season"].astype(str).values + "-" + df["_round"].astype(str).values
+        temp = self._fit_softmax_temperature(oof_meta, y, race_ids)
+        print(f"[Predictor] Softmax temperature fitted: T = {temp:.3f}")
 
         trained_at = datetime.now(timezone.utc)
         bundle = {
@@ -952,7 +955,8 @@ class RacePredictor:
             "lgb_model": lgb_mod,
             "cb_model": cb_mod,
             "meta_model": meta,
-            "calibrator": calibrator,
+            "softmax_temp": temp,
+            "data_version": MODEL_DATA_VERSION,
             "trained_at": trained_at,
             "seasons": seasons,
             "feature_columns": FEATURE_COLUMNS,
@@ -989,33 +993,49 @@ class RacePredictor:
     # ══════════════════════════════════════════════════════════════════════════
 
     def _ensure_model(self) -> bool:
-        with self._lock:
-            if self._model_bundle and self._trained_at:
-                age = (datetime.now(timezone.utc) - self._trained_at).total_seconds() / 3600
-                if age < MODEL_MAX_AGE_HOURS:
-                    return True
+        """Make a model available without ever blocking a request on training.
 
-        if os.path.exists(MODEL_PATH):
+        A stale model is still a good model: serve it and refresh it in the
+        background. Only when no model exists at all do we report False
+        (while a background train is kicked off)."""
+        with self._lock:
+            have = self._model_bundle is not None
+            trained_at = self._trained_at
+        if not have and os.path.exists(MODEL_PATH):
             try:
                 payload = load(MODEL_PATH)
-                # Detect old format (single model without "xgb_model")
-                if "xgb_model" not in payload:
-                    print("[Predictor] Old model format detected — retraining with ensemble.")
+                if "xgb_model" not in payload or payload.get("feature_columns") != FEATURE_COLUMNS:
+                    print("[Predictor] Saved model is from an older feature set — discarding.")
                     os.remove(MODEL_PATH)
-                    raise ValueError("old_format")
-                if payload.get("feature_columns") != FEATURE_COLUMNS:
-                    os.remove(MODEL_PATH)
-                    raise ValueError("stale_feature_set")
-                age = (datetime.now(timezone.utc) - payload["trained_at"]).total_seconds() / 3600
-                if age < MODEL_MAX_AGE_HOURS:
+                else:
                     with self._lock:
                         self._model_bundle = payload
-                        self._trained_at = payload["trained_at"]
-                    return True
+                        self._trained_at = trained_at = payload["trained_at"]
+                    have = True
             except Exception as e:
-                print(f"[Predictor] Cached model invalid, retraining: {e}")
+                print(f"[Predictor] Saved model unreadable: {e}")
 
-        return self.train()
+        if have:
+            age_h = (datetime.now(timezone.utc) - trained_at).total_seconds() / 3600
+            outdated = self._model_bundle.get("data_version", 1) < MODEL_DATA_VERSION
+            if outdated or age_h > MODEL_MAX_AGE_HOURS:
+                self.train_in_background()
+            return True
+
+        self.train_in_background()
+        return False
+
+    def train_in_background(self, seasons=None):
+        """Start a training run on a daemon thread unless one is running."""
+        if self.is_training:
+            return False
+        threading.Thread(target=self.train, kwargs={"seasons": seasons},
+                         daemon=True, name="predictor-train").start()
+        return True
+
+    @property
+    def is_training(self) -> bool:
+        return self._train_lock.locked()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Inference
@@ -1034,15 +1054,33 @@ class RacePredictor:
         stacked = bundle["meta_model"].predict(oof_stack)
         return stacked, xgb_preds, lgb_preds, cb_preds
 
+    @staticmethod
+    def _race_softmax(positions: np.ndarray, temp: float) -> np.ndarray:
+        """Win probabilities for one race: softmax over negative predicted
+        finishing positions (lower predicted position → higher chance)."""
+        z = -(positions - positions.min()) / max(temp, 1e-3)
+        e = np.exp(z)
+        return e / e.sum()
+
+    @classmethod
+    def _fit_softmax_temperature(cls, preds, finishing, race_ids) -> float:
+        """Grid-search the temperature minimising winner negative log-likelihood."""
+        races = [np.where(race_ids == r)[0] for r in np.unique(race_ids)]
+        races = [idx for idx in races if (finishing[idx] == 1).any()]
+        best_t, best_nll = 2.5, float("inf")
+        for t in np.geomspace(0.2, 10, 60):
+            nll = 0.0
+            for idx in races:
+                p = cls._race_softmax(preds[idx], t)
+                nll -= np.log(p[np.argmax(finishing[idx] == 1)] + 1e-12)
+            if nll < best_nll:
+                best_t, best_nll = float(t), nll
+        return best_t
+
     def _calibrated_win_probs(self, stacked_positions: np.ndarray) -> np.ndarray:
-        """Convert predicted positions → calibrated win probabilities."""
-        bundle = self._model_bundle
-        raw = np.exp(-0.4 * (stacked_positions - 1))
-        raw_norm = raw / (raw.sum() + 1e-9)
-        cal = bundle["calibrator"].predict(raw_norm)
-        # Re-normalise so they sum to 1 (isotonic can perturb this slightly)
-        total = cal.sum()
-        return cal / total if total > 0 else raw_norm
+        """Convert one race's predicted positions → win probabilities."""
+        temp = self._model_bundle.get("softmax_temp", 2.5)
+        return self._race_softmax(np.asarray(stacked_positions, dtype=float), temp)
 
     def _compute_shap(self, X: np.ndarray) -> list[list[dict]]:
         """
@@ -1187,7 +1225,8 @@ class RacePredictor:
 
     def predict_race(self, season, round_num, include_shap=True):
         if not self._ensure_model():
-            return {"error": "Not enough historical data.", "predictions": []}
+            return {"error": "The model is training on historical data. Check back in a few minutes.",
+                    "training": True, "predictions": []}
 
         X_df, meta_rows, circuit_id = self._build_inference_df(season, round_num)
         if X_df.empty:
@@ -1271,7 +1310,7 @@ class RacePredictor:
         """Return metadata about the currently loaded model."""
         with self._lock:
             if not self._model_bundle:
-                return {"loaded": False}
+                return {"loaded": False, "training": self.is_training}
             bundle = self._model_bundle
             return {
                 "loaded": True,
@@ -1281,4 +1320,5 @@ class RacePredictor:
                 "n_training_rows": bundle.get("n_training_rows", 0),
                 "feature_count": len(FEATURE_COLUMNS),
                 "oof_mae": round(bundle.get("oof_mae", 0), 3),
+                "training": self.is_training,
             }

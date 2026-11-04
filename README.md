@@ -11,6 +11,7 @@ A full-featured Formula 1 dashboard with real-time timing, championship standing
 ## ✨ Features
 
 ### 📊 Dashboard
+- **Title fight**: live championship maths for drivers *and* constructors. It shows who can still win, each contender's maximum reachable points, and exactly what the leader needs to clinch at the next round (sprints included)
 - Championship standings (drivers & constructors) at a glance
 - Next race countdown with circuit info and sprint weekend badges
 - Recent race results with winner highlights
@@ -48,9 +49,9 @@ A full-featured Formula 1 dashboard with real-time timing, championship standing
 
 ### 🤖 Race Winner Predictor
 - **Stacking ensemble**: XGBoost + LightGBM + CatBoost
-- **Optuna HPO**: 50 trials per model for hyperparameter tuning
+- **Optuna HPO**: 20 trials per model by default (`PREDICTOR_OPTUNA_TRIALS` to change)
 - **40+ engineered features**: grid, qualifying gap, driver/constructor form, Elo ratings, circuit history, momentum, DNF rate, home race bonus, pit strategy, and more
-- **Isotonic calibration** for reliable win probabilities
+- **Per-race softmax calibration** (temperature fitted to actual winners) for win probabilities that sum to 100%
 - **SHAP explainability**: per-driver waterfall explanations
 - **Live predictions**: adjusts probabilities based on current race positions
 - Trains on 8 seasons of historical data with GroupKFold cross-validation
@@ -58,7 +59,11 @@ A full-featured Formula 1 dashboard with real-time timing, championship standing
 ### ⚡ Performance
 - SQLite caching layer with configurable TTLs (avoids redundant API calls)
 - In-memory LRU cache for hot data (positions, weather, intervals)
-- Thread-safe rate limiting with 429 backoff
+- Per-host rate limiting (Jolpica / OpenF1) with 429 backoff, so a slow host never stalls another
+- Full Jolpica pagination (the API caps pages at 100 rows), so every season is complete
+- Stale-cache fallback: if an upstream API is down, the last good data is served instead of an empty page
+- Live-page feeds fetched concurrently; dead upstreams are circuit-broken instead of retried on every load
+- Predictor never blocks a request: the saved model serves while a fresh one trains in the background
 - Bulk season data fetching (single API call per data type per season)
 - Background model training (non-blocking server startup)
 - HTTP keep-alive via `requests.Session`
@@ -69,12 +74,12 @@ A full-featured Formula 1 dashboard with real-time timing, championship standing
 
 | Layer | Technology |
 |---|---|
-| **Backend** | Python · Flask · Flask-SocketIO · Eventlet |
+| **Backend** | Python · Flask · Flask-SocketIO (threading + simple-websocket) |
 | **Data Sources** | [Jolpica (Ergast)](https://api.jolpi.ca) · [OpenF1](https://openf1.org) · [F1 Live Timing](https://livetiming.formula1.com) · [FastF1](https://docs.fastf1.dev) |
 | **ML / Prediction** | XGBoost · LightGBM · CatBoost · scikit-learn · Optuna · SHAP |
 | **Database** | SQLite (WAL mode) |
 | **Frontend** | Jinja2 templates · Vanilla JS · Chart.js · WebSocket |
-| **Real-time** | Socket.IO with Eventlet async mode |
+| **Real-time** | Socket.IO over native WebSockets (no eventlet) |
 
 ---
 
@@ -86,6 +91,7 @@ f1-dashboard/
 ├── api_client.py          # Unified F1 data client (Jolpica + OpenF1 + F1 Live Timing)
 ├── fastf1_client.py       # FastF1 wrapper for telemetry and detailed lap data
 ├── predictor.py           # ML race predictor (stacking ensemble + Elo + SHAP)
+├── championship.py        # Title-fight maths: contention, ceilings, clinch scenarios
 ├── database.py            # SQLite caching layer
 ├── requirements.txt       # Python dependencies
 ├── .env.example           # Environment variable template
@@ -93,7 +99,6 @@ f1-dashboard/
 ├── f1_cache.db            # SQLite cache database (auto-generated)
 ├── static/
 │   ├── css/
-│   │   ├── core.css       # Design tokens, layout primitives
 │   │   └── style.css      # Component styles
 │   ├── js/
 │   │   ├── main.js        # Client-side logic, charts, WebSocket, command palette
@@ -176,7 +181,7 @@ f1-dashboard/
    python app.py
    ```
 
-   The server starts at **http://localhost:8050** with WebSocket support via Eventlet.
+   The server starts at **http://localhost:8050** with native WebSocket support.
 
 ---
 
@@ -252,7 +257,7 @@ The race predictor uses a **3-layer stacking architecture**:
 **Key design decisions:**
 - **GroupKFold** by season prevents data leakage across time
 - **Elo ratings** for drivers and constructors (all-time head-to-head performance)
-- **Isotonic calibration** maps raw scores to well-calibrated probabilities
+- **Per-race softmax calibration**: predicted positions → win probabilities normalised within each race, with the temperature fitted by maximum likelihood on out-of-fold predictions
 - **SHAP values** provide transparent, per-driver feature importance
 
 ---

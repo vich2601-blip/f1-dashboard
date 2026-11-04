@@ -46,7 +46,8 @@ class F1DataClient:
         self._cache_lock = threading.Lock()
         self._rate_lock = threading.Lock()
         self._openf1_auth_lock = threading.Lock()
-        self._last_request_time = 0
+        self._last_request_time = {}  # host -> last request timestamp
+        self._live_timing_disabled_until = 0  # circuit breaker for F1 Live Timing
         self._backoff_until = 0  # Timestamp until which we should back off (429 handling)
         self._session = requests.Session()  # Use HTTP Keep-Alive to avoid TCP exhaustion
         # OpenF1 requires authentication for real-time data. A long-lived
@@ -62,20 +63,25 @@ class F1DataClient:
 
     # ── Rate Limiter ─────────────────────────────────────────────
 
-    def _rate_limit(self):
-        """Ensure at least 0.5s between API calls. Thread-safe.
-        Respects backoff from 429 responses."""
+    # Minimum spacing between requests, per upstream host. Jolpica allows
+    # 4 req/s burst; OpenF1 allows 3 req/s. Spacing per host means a slow
+    # OpenF1 call never queues Jolpica requests behind it.
+    _HOST_SPACING = {"api.jolpi.ca": 0.4, "api.openf1.org": 0.36}
+
+    def _rate_limit(self, url=""):
+        """Thread-safe per-host rate limiter that respects 429 backoff."""
+        host = url.split("/")[2] if "://" in url else ""
+        spacing = self._HOST_SPACING.get(host, 0.5)
+        # Reserve the next slot under the lock, then sleep outside it so
+        # threads waiting on one host never block requests to another.
         with self._rate_lock:
             now = time.time()
-            # If we're in a backoff period from a 429, wait it out
+            slot = max(now, self._last_request_time.get(host, 0) + spacing)
             if now < self._backoff_until:
-                wait = self._backoff_until - now
-                time.sleep(wait)
-            else:
-                elapsed = now - self._last_request_time
-                if elapsed < 1.2:
-                    time.sleep(1.2 - elapsed)
-            self._last_request_time = time.time()
+                slot = max(slot, self._backoff_until)
+            self._last_request_time[host] = slot
+        if slot > now:
+            time.sleep(slot - now)
 
     @property
     def openf1_auth_configured(self):
@@ -167,12 +173,12 @@ class F1DataClient:
         # Build a stable cache key for 404 suppression
         import urllib.parse
         _404_key = f"_404_{url}_{urllib.parse.urlencode(sorted((params or {}).items()))}"
-        if self._mem_get(_404_key, 60) is not None:  # suppress for 60s after a 404
+        if self._mem_get(_404_key, 300) is not None:  # suppress for 5 min after a 404
             return None
 
         max_retries = 3
         for attempt in range(max_retries):
-            self._rate_limit()
+            self._rate_limit(url)
             try:
                 is_openf1 = url.startswith(self.OPENF1_BASE)
                 headers = self._openf1_headers() if is_openf1 else None
@@ -201,7 +207,7 @@ class F1DataClient:
                 if resp.status_code == 404:
                     # Cache the 404 for 60s to avoid hammering the API on stale session keys
                     self._mem_set(_404_key, True)
-                    print(f"[API 404 — suppressing 60s] {url}")
+                    print(f"[API 404 — suppressing 5m] {url}")
                     return None
                 if resp.status_code == 401 and is_openf1:
                     self._record_openf1_unauthorized()
@@ -229,15 +235,26 @@ class F1DataClient:
         """Latest Formula 1 Live Timing error, safe to display to a user."""
         return self._live_timing_last_error
 
-    def _fetch_f1_live_json(self, url, timeout=20):
-        """Fetch a Formula 1 Live Timing feed, accounting for its UTF-8 BOM."""
-        self._rate_limit()
+    def _fetch_f1_live_json(self, url, timeout=8):
+        """Fetch a Formula 1 Live Timing feed, accounting for its UTF-8 BOM.
+
+        The static archive started returning 401 for anonymous clients, so a
+        401/403 trips a 30-minute circuit breaker instead of costing every
+        page load several multi-second round trips."""
+        if time.time() < self._live_timing_disabled_until:
+            return None
+        self._rate_limit(url)
         try:
             response = self._session.get(
                 url,
                 headers={"Accept": "application/json"},
                 timeout=timeout,
             )
+            if response.status_code in (401, 403):
+                self._live_timing_disabled_until = time.time() + 1800
+                self._live_timing_last_error = "Formula 1 Live Timing archive requires authentication."
+                print(f"[F1 Live Timing] {response.status_code} — fallback disabled for 30 min")
+                return None
             response.raise_for_status()
             data = json.loads(response.content.decode("utf-8-sig"))
             self._live_timing_last_error = None
@@ -279,6 +296,56 @@ class F1DataClient:
 
     # ── Schedule ──────────────────────────────────────────────────
 
+    def _historical_ttl(self, season):
+        """Past seasons are immutable; only the current season needs refreshing."""
+        return 24 * 30 if season < datetime.now(timezone.utc).year else 3
+
+    def _season_cache_incomplete(self, season, rows):
+        """Per-round fetches share the season tables, so a fresh-looking
+        season cache can hold only the rounds someone happened to open.
+        Treat it as incomplete if it covers fewer rounds than have finished
+        (allowing a 6h grace window for Jolpica to publish results)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=6)
+        finished = sum(1 for r in self.get_schedule(season) if (self._race_datetime(r) or cutoff) < cutoff)
+        return len({r["round"] for r in rows}) < finished
+
+    @staticmethod
+    def _race_datetime(race):
+        """Parse a schedule row's date/time to an aware UTC datetime."""
+        try:
+            t = race.get("time") or "14:00:00Z"
+            dt = datetime.fromisoformat(f"{race['date']}T{t}".replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    def _jolpica_races(self, path, list_key):
+        """Fetch every page of a Jolpica race-table endpoint.
+
+        Jolpica silently caps `limit` at 100, so season-wide queries must be
+        paged with `offset`. Races that straddle a page boundary are merged
+        by round. Returns None if any page fails, so callers never cache a
+        partial season."""
+        races = {}
+        offset, limit = 0, 100
+        while True:
+            data = self._fetch_json(
+                f"{self.JOLPICA_BASE}/{path}", params={"limit": limit, "offset": offset}
+            )
+            if not data:
+                return None
+            mr = data.get("MRData", {})
+            for race in mr.get("RaceTable", {}).get("Races", []):
+                key = race.get("round")
+                if key not in races:
+                    races[key] = {**race, list_key: []}
+                races[key][list_key].extend(race.get(list_key, []))
+            total = int(mr.get("total", 0))
+            offset += limit
+            if offset >= total:
+                break
+        return sorted(races.values(), key=lambda r: int(r.get("round", 0)))
+
     def get_schedule(self, season=2026):
         """Get the full race calendar for a season."""
         cached = get_cached("races", {"season": season}, self.CACHE_SCHEDULE)
@@ -288,7 +355,8 @@ class F1DataClient:
         url = f"{self.JOLPICA_BASE}/{season}.json"
         data = self._fetch_json(url)
         if not data:
-            return []
+            stale = get_cached("races", {"season": season}, 0, allow_stale=True) or []
+            return sorted(stale, key=lambda x: x["round"])
 
         races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
         now = datetime.now(timezone.utc).isoformat()
@@ -333,7 +401,8 @@ class F1DataClient:
         url = f"{self.JOLPICA_BASE}/{season}/{round_num}/results.json"
         data = self._fetch_json(url)
         if not data:
-            return []
+            stale = get_cached("results", {"season": season, "round": round_num}, 0, allow_stale=True) or []
+            return sorted(stale, key=lambda x: x["position"])
 
         races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
         if not races:
@@ -375,16 +444,14 @@ class F1DataClient:
 
     def get_season_results(self, season):
         """Get all race results for a season from cache or API in a single query."""
-        cached = get_cached("results", {"season": season}, self.CACHE_HISTORICAL)
-        if cached:
-            return cached
+        cached = get_cached("results", {"season": season}, self._historical_ttl(season))
+        if cached and not self._season_cache_incomplete(season, cached):
+            return sorted(cached, key=lambda r: (r["round"], r["position"]))
 
-        url = f"{self.JOLPICA_BASE}/{season}/results.json?limit=1000"
-        data = self._fetch_json(url)
-        if not data:
-            return []
+        races = self._jolpica_races(f"{season}/results.json", "Results")
+        if races is None:
+            return get_cached("results", {"season": season}, 0, allow_stale=True) or []
 
-        races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
         now = datetime.now(timezone.utc).isoformat()
 
         all_rows = []
@@ -423,16 +490,14 @@ class F1DataClient:
 
     def get_season_qualifying(self, season):
         """Get all qualifying results for a season from cache or API in a single query."""
-        cached = get_cached("qualifying", {"season": season}, self.CACHE_HISTORICAL)
-        if cached:
-            return cached
+        cached = get_cached("qualifying", {"season": season}, self._historical_ttl(season))
+        if cached and not self._season_cache_incomplete(season, cached):
+            return sorted(cached, key=lambda r: (r["round"], r["position"]))
 
-        url = f"{self.JOLPICA_BASE}/{season}/qualifying.json?limit=1000"
-        data = self._fetch_json(url)
-        if not data:
-            return []
+        races = self._jolpica_races(f"{season}/qualifying.json", "QualifyingResults")
+        if races is None:
+            return get_cached("qualifying", {"season": season}, 0, allow_stale=True) or []
 
-        races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
         now = datetime.now(timezone.utc).isoformat()
 
         all_rows = []
@@ -517,7 +582,8 @@ class F1DataClient:
         url = f"{self.JOLPICA_BASE}/{season}/driverStandings.json"
         data = self._fetch_json(url)
         if not data:
-            return []
+            stale = get_cached("driver_standings", {"season": season}, 0, allow_stale=True) or []
+            return sorted(stale, key=lambda x: x["position"])
 
         standings_lists = (
             data.get("MRData", {})
@@ -568,7 +634,8 @@ class F1DataClient:
         url = f"{self.JOLPICA_BASE}/{season}/constructorStandings.json"
         data = self._fetch_json(url)
         if not data:
-            return []
+            stale = get_cached("constructor_standings", {"season": season}, 0, allow_stale=True) or []
+            return sorted(stale, key=lambda x: x["position"])
 
         standings_lists = (
             data.get("MRData", {})
@@ -612,30 +679,11 @@ class F1DataClient:
         if cached:
             return cached
 
-        # Fetch all laps (use large page size to minimize roundtrips)
-        all_laps = []
-        offset = 0
-        limit = 1000
-
-        while True:
-            url = f"{self.JOLPICA_BASE}/{season}/{round_num}/laps.json?limit={limit}&offset={offset}"
-            data = self._fetch_json(url)
-            if not data:
-                break
-
-            races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
-            if not races:
-                break
-
-            laps = races[0].get("Laps", [])
-            if not laps:
-                break
-
-            all_laps.extend(laps)
-            total = int(data.get("MRData", {}).get("total", 0))
-            offset += limit
-            if offset >= total:
-                break
+        # Each page is 100 timings (≈5 laps), so a race is ~12–15 pages.
+        races = self._jolpica_races(f"{season}/{round_num}/laps.json", "Laps")
+        if races is None:
+            return get_cached("lap_times", {"season": season, "round": round_num}, 0, allow_stale=True) or []
+        all_laps = races[0]["Laps"] if races else []
 
         now = datetime.now(timezone.utc).isoformat()
         rows = []

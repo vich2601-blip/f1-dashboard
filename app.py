@@ -1,5 +1,4 @@
-import eventlet
-eventlet.monkey_patch()
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime, timezone
@@ -12,6 +11,7 @@ from database import init_db
 from api_client import F1DataClient
 from fastf1_client import FastF1Client
 from predictor import RacePredictor
+from championship import title_fight
 
 app = Flask(__name__)
 # SECRET_KEY must come from the environment in any real deployment — a
@@ -23,8 +23,12 @@ if not os.environ.get('SECRET_KEY'):
     print("⚠️  SECRET_KEY not set in environment — using a random ephemeral key. "
           "Set SECRET_KEY for production deployments.")
 
-# Initialize SocketIO with eventlet async mode for true WebSocket support
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins='*')
+# Threading mode + simple-websocket gives real WebSockets without eventlet,
+# which is deprecated and unreliable on Python 3.13+.
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins='*')
+
+# Shared pool for fanning out independent upstream API calls.
+_io_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="f1-io")
 
 client = F1DataClient()
 ff1 = FastF1Client()
@@ -205,9 +209,13 @@ def dashboard():
         except (TypeError, ValueError):
             leader_gap = None
     constructor_leader = constructor_standings[0] if constructor_standings else None
+    driver_fight = title_fight(driver_standings, schedule or [], "driver_code", top_n=1)
+    constructor_fight = title_fight(constructor_standings, schedule or [], "constructor", top_n=2)
 
     return render_template(
         "dashboard.html",
+        driver_fight=driver_fight,
+        constructor_fight=constructor_fight,
         driver_standings=driver_standings[:8],
         constructor_standings=constructor_standings[:8],
         next_race=next_race,
@@ -750,6 +758,22 @@ def compare_drivers():
         progression_data=progression_data,
     )
 
+def _round_for_date(season, iso_date):
+    """Map a session start time to the championship round of that weekend."""
+    try:
+        when = datetime.fromisoformat((iso_date or "").replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+    for race in client.get_schedule(season) or []:
+        try:
+            race_day = datetime.fromisoformat(race["date"]).date()
+        except (KeyError, ValueError):
+            continue
+        if 0 <= (race_day - when).days <= 4:  # FP1 is at most 3 days before the GP
+            return race["round"]
+    return None
+
+
 @app.route("/live")
 def live_timing():
     """Live timing page with circuit map and timing tower."""
@@ -772,13 +796,14 @@ def live_timing():
                 year = try_year
                 break
 
-    # Default to the latest race session if none specified
-    if not session_key and sessions:
-        race_sessions = [s for s in sessions if s.get("session_type") == "Race"]
-        if race_sessions:
-            session_key = race_sessions[-1]["session_key"]
-        elif sessions:
-            session_key = sessions[-1]["session_key"]
+    # Default to the session that is live now, else the most recent one that
+    # has started. (Picking the last scheduled race meant defaulting to a
+    # future session with no data, which made every feed call time out.)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    started = [s for s in sessions if (s.get("date_start") or "") <= now_iso]
+    if not session_key and started:
+        live_now = [s for s in started if (s.get("date_end") or "") >= now_iso]
+        session_key = (live_now or started)[-1]["session_key"]
 
     # Get session info
     session_info = None
@@ -797,14 +822,35 @@ def live_timing():
     stints = []
     track_outline = []
 
-    if session_key:
-        drivers = client.get_unified_drivers(session_key)
-        positions = client.get_unified_positions(session_key)
-        laps = client.get_unified_laps(session_key)
-        weather = client.get_unified_weather(session_key)
-        race_control = client.get_unified_race_control(session_key)
-        stints = client.get_unified_stints(session_key)
-        track_outline = client.get_unified_track_outline(session_key)
+    # Attach the championship round so live win-odds can query the predictor.
+    if session_info and not session_info.get("round"):
+        session_info = dict(session_info)
+        session_info["round"] = _round_for_date(year, session_info.get("date_start"))
+
+    session_upcoming = bool(
+        session_info and (session_info.get("date_start") or "") > now_iso
+    )
+    if session_key and not session_upcoming:
+        # Independent feeds — fetch concurrently instead of back-to-back.
+        futures = {
+            name: _io_pool.submit(getattr(client, f"get_unified_{name}"), session_key)
+            for name in ("drivers", "positions", "laps", "weather",
+                         "race_control", "stints", "track_outline")
+        }
+        fetched = {}
+        for name, fut in futures.items():
+            try:
+                fetched[name] = fut.result(timeout=25)
+            except Exception as err:
+                print(f"[live] {name} failed: {err}")
+                fetched[name] = []
+        drivers = fetched["drivers"]
+        positions = fetched["positions"]
+        laps = fetched["laps"]
+        weather = fetched["weather"] or {}
+        race_control = fetched["race_control"]
+        stints = fetched["stints"]
+        track_outline = fetched["track_outline"]
 
     # Build driver lookup for template
     driver_map = {d["driver_number"]: d for d in drivers}
@@ -865,6 +911,7 @@ def live_timing():
         track_outline=track_outline,
         data_source=data_source,
         data_source_label=data_source_label,
+        session_upcoming=session_upcoming,
     )
 
 
@@ -877,26 +924,18 @@ def api_live_data(session_key):
     """
     full = request.args.get("full", "0") == "1"
 
-    # Always fetch fast-changing data via unified (free) methods
-    positions = client.get_unified_positions(session_key)
-    locations = client.get_unified_locations(session_key)
-    intervals = client.get_unified_intervals(session_key)
-
-    result = {
-        "positions": positions,
-        "locations": locations,
-        "intervals": intervals,
-        "data_source": client.last_data_source,
-    }
-
-    # Only include slow-changing data on full refresh
-    if full:
-        result["drivers"] = client.get_unified_drivers(session_key)
-        result["laps"] = client.get_unified_laps(session_key)
-        result["weather"] = client.get_unified_weather(session_key)
-        result["race_control"] = client.get_unified_race_control(session_key)
-        result["stints"] = client.get_unified_stints(session_key)
-
+    names = ["positions", "locations", "intervals"]
+    if full:  # slow-changing data only on full refresh
+        names += ["drivers", "laps", "weather", "race_control", "stints"]
+    futures = {n: _io_pool.submit(getattr(client, f"get_unified_{n}"), session_key) for n in names}
+    result = {}
+    for n, fut in futures.items():
+        try:
+            result[n] = fut.result(timeout=25)
+        except Exception as err:
+            print(f"[api/live] {n} failed: {err}")
+            result[n] = []
+    result["data_source"] = client.last_data_source
     return jsonify(result)
 
 
@@ -1278,22 +1317,12 @@ def api_predict_live(season, round_num):
 
 @app.route("/api/predict/retrain", methods=["POST"])
 def api_predict_retrain():
-    """Force an immediate model retrain using up to 8 seasons of data.
-    Runs in the background — returns immediately with status 'started'."""
-    import threading
-    yr = datetime.now(timezone.utc).year
+    """Retrain the ensemble in the background; the current model keeps serving."""
     from predictor import DEFAULT_TRAINING_SEASONS
+    yr = datetime.now(timezone.utc).year
     seasons = list(range(yr - DEFAULT_TRAINING_SEASONS + 1, yr + 1))
-
-    def _retrain():
-        ok = predictor.train(seasons=seasons)
-        if ok:
-            print(f"[Retrain] ✅ Ensemble retrained on {seasons}")
-        else:
-            print("[Retrain] ❌ Not enough data.")
-
-    t = threading.Thread(target=_retrain, daemon=True)
-    t.start()
+    if not predictor.train_in_background(seasons):
+        return jsonify({"status": "started", "message": "Training already in progress"})
     return jsonify({"status": "started", "message": f"Retraining on seasons {seasons[0]}–{seasons[-1]}"})
 
 
@@ -1305,18 +1334,12 @@ init_db()
 
 if __name__ == "__main__":
     print("🏎️  F1 Dashboard starting on http://localhost:8050")
-    print("   WebSocket: enabled (eventlet)")
+    print("   WebSocket: enabled (threading + simple-websocket)")
     print("   FastF1:    enabled (cache: ./fastf1_cache)")
     print("   Predictor: XGBoost + LightGBM + CatBoost Stacking Ensemble (8 seasons)")
     # Start background emitter thread
     socketio.start_background_task(_background_emitter)
-    # Train the ensemble predictor in the background so startup is never blocked.
-    # Uses up to 8 seasons of historical data for maximum accuracy.
-    from predictor import DEFAULT_TRAINING_SEASONS
-    yr = datetime.now(timezone.utc).year
-    train_seasons = list(range(yr - DEFAULT_TRAINING_SEASONS + 1, yr + 1))
-    threading.Thread(
-        target=lambda: predictor.train(seasons=train_seasons),
-        daemon=True,
-    ).start()
-    socketio.run(app, host="127.0.0.1", port=8050, debug=False)
+    # Load the saved model (or start training one) without blocking startup.
+    threading.Thread(target=predictor._ensure_model, daemon=True).start()
+    socketio.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", 8050)),
+                 debug=False, allow_unsafe_werkzeug=True)

@@ -4,6 +4,57 @@
 {% block meta_description %}Live Formula 1 dashboard with championship standings, next race countdown, and recent race results.{% endblock %}
 {% block topbar_label %}Overview{% endblock %}
 
+{% macro fight_panel(f, kind, title) %}
+<div class="fight-panel {% if f.decided %}is-decided{% endif %}">
+    <div class="fight-head">
+        <div>
+            <span class="fight-kicker">{{ title }}</span>
+            {% if f.decided %}
+            <h3 class="fight-verdict"><span class="fight-crown">★</span> {{ f.leader.full_name }} is champion</h3>
+            <p class="fight-sub">Lead of <b class="mono">{{ f.gap|int }}</b> pts with only <b class="mono">{{ f.max_left }}</b> left to win.</p>
+            {% elif f.events_left == 0 %}
+            <h3 class="fight-verdict">Season complete</h3>
+            {% else %}
+            <h3 class="fight-verdict">{{ f.alive_count }} still in contention</h3>
+            <p class="fight-sub"><b class="mono">{{ f.max_left }}</b> pts left across {{ f.events_left }} GP{{ 's' if f.events_left != 1 }}{% if f.sprints_left %} + {{ f.sprints_left }} sprint{{ 's' if f.sprints_left != 1 }}{% endif %}</p>
+            {% endif %}
+        </div>
+        <div class="fight-gap">
+            <span class="mono">+{{ f.gap|int }}</span>
+            <small>lead</small>
+        </div>
+    </div>
+    <div class="fight-bars fight-bars--{{ kind }}" style="--leader: {{ f.leader_line_pct }}%">
+        <div class="fight-leader-line" title="Leader's current total"></div>
+        {% for c in f.contenders[:6] %}
+        {% set colour = get_team_colour(c.team if kind == 'driver' else c.name) %}
+        <div class="fight-row {% if not c.alive %}is-out{% endif %}" style="--c: {{ colour }}; --delay: {{ loop.index * 0.05 }}s">
+            <span class="fight-name mono" title="{{ c.full_name }}">{{ c.name|replace(' F1 Team', '')|replace(' Team', '') }}</span>
+            <div class="fight-track">
+                <div class="fight-reach" style="width: {{ c.pct_ceiling }}%"></div>
+                <div class="fight-points" style="width: {{ c.pct_points }}%"></div>
+            </div>
+            <span class="fight-status mono">
+                {% if loop.first %}{{ c.points|int }}{% elif c.alive %}−{{ c.behind|int }}{% else %}OUT{% endif %}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+    {% if f.clinch %}
+    <p class="fight-clinch">
+        {% if f.clinch.rival_must_gain > 0 %}
+        <b>{{ f.leader.name }}</b> clinches at the {{ f.clinch.event }} unless {{ f.runner_up.name }} outscores them by <b class="mono">{{ f.clinch.rival_must_gain }}</b>+ pts.
+        {% elif f.clinch.possible %}
+        <b>{{ f.leader.name }}</b> clinches at the {{ f.clinch.event }} by leaving with a lead over <b class="mono">{{ f.clinch.lead_needed - 1 }}</b> pts{% if f.clinch.outscore_by > 0 %}, so outscoring {{ f.runner_up.name }} by <b class="mono">{{ f.clinch.outscore_by }}</b>+{% endif %}.
+        {% else %}
+        The title cannot be settled at the {{ f.clinch.event }}. It goes on to at least the next round.
+        {% endif %}
+    </p>
+    {% endif %}
+    <div class="fight-legend"><span class="lg-pts"></span> Points <span class="lg-reach"></span> Max reachable <span class="lg-line"></span> Leader today</div>
+</div>
+{% endmacro %}
+
 {% block content %}
 <div class="dashboard">
     <div class="home-grid">
@@ -85,6 +136,19 @@
                 <span class="pulse-hint">Track map + tower</span>
             </a>
         </section>
+
+        {% if driver_fight or constructor_fight %}
+        <section class="card card-accent title-fight-card" id="title-fight">
+            <div class="card-header">
+                <h2 class="card-title">Title fight</h2>
+                <span class="card-link-muted">Mathematical scenarios · updates after every session</span>
+            </div>
+            <div class="fight-grid">
+                {% if driver_fight %}{{ fight_panel(driver_fight, 'driver', "Drivers' championship") }}{% endif %}
+                {% if constructor_fight %}{{ fight_panel(constructor_fight, 'team', "Constructors' championship") }}{% endif %}
+            </div>
+        </section>
+        {% endif %}
 
         <section class="card card-accent standings-card" id="driver-standings-card">
             <div class="card-header">

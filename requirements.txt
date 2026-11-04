@@ -1,7 +1,7 @@
 flask
 requests
 flask-socketio
-eventlet
+simple-websocket
 fastf1
 scikit-learn
 joblib

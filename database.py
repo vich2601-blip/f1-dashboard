@@ -260,7 +260,30 @@ def init_db():
     """)
 
     conn.commit()
+    _migrate_cache(conn)
     conn.close()
+
+
+# Bump whenever cached rows from an older client version are known to be
+# wrong. v2: Jolpica caps pages at 100 rows, and v1 never paginated, so
+# season-wide results/qualifying/lap tables only held the first ~5 rounds.
+CACHE_VERSION = 2
+
+
+def _migrate_cache(conn):
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    row = cur.execute("SELECT value FROM meta WHERE key = 'cache_version'").fetchone()
+    current = int(row[0]) if row else 1
+    if current < CACHE_VERSION:
+        for table in ("results", "qualifying", "lap_times", "pit_stops"):
+            cur.execute(f"DELETE FROM {table}")
+        cur.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('cache_version', ?)",
+            (str(CACHE_VERSION),),
+        )
+        conn.commit()
+        print(f"[DB] Cache migrated v{current} -> v{CACHE_VERSION} (purged truncated season data)")
 
 def is_stale(fetched_at_str, max_age_hours=1):
     """Check if cached data is stale based on age."""
@@ -276,7 +299,7 @@ def is_stale(fetched_at_str, max_age_hours=1):
         return True
 
 
-def get_cached(table, filters, max_age_hours=1):
+def get_cached(table, filters, max_age_hours=1, allow_stale=False):
     """
     Check cache for data. Returns list of dicts if fresh, None if stale/missing.
     
@@ -314,7 +337,7 @@ def get_cached(table, filters, max_age_hours=1):
     # Check freshness using fetched_at from first row
     first_row = dict(rows[0])
     fetched_at = first_row.get("fetched_at")
-    if is_stale(fetched_at, max_age_hours):
+    if not allow_stale and is_stale(fetched_at, max_age_hours):
         return None
 
     return [dict(row) for row in rows]

@@ -216,17 +216,17 @@ function initPointsChart(canvasId, data, title) {
                     cornerRadius: 8,
                     padding: 12,
                     titleFont: { family: "'Inter', sans-serif", weight: '600' },
-                    bodyFont: { family: "'JetBrains Mono', monospace" },
+                    bodyFont: { family: "'IBM Plex Mono', monospace" },
                 },
             },
             scales: {
                 x: {
                     grid: { color: 'rgba(255, 255, 255, 0.04)' },
-                    ticks: { font: { family: "'JetBrains Mono', monospace", size: 11 } },
+                    ticks: { font: { family: "'IBM Plex Mono', monospace", size: 11 } },
                 },
                 y: {
                     grid: { display: false },
-                    ticks: { font: { family: "'JetBrains Mono', monospace", size: 12, weight: '600' } },
+                    ticks: { font: { family: "'IBM Plex Mono', monospace", size: 12, weight: '600' } },
                 },
             },
             animation: {
@@ -244,15 +244,13 @@ function initLapTimeChart(lapData) {
 
     function timeToSeconds(timeStr) {
         if (!timeStr) return null;
-        var parts = timeStr.split(':');
-        if (parts.length === 2) {
-            return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
-        }
-        return parseFloat(timeStr);
+        var parts = timeStr.split(':').map(parseFloat);
+        return parts.reduce(function (acc, p) { return acc * 60 + p; }, 0);
     }
 
     var datasets = [];
     var maxLap = 0;
+    var allTimes = [];
 
     Object.keys(lapData).forEach(function (driverCode) {
         var driver = lapData[driverCode];
@@ -263,6 +261,7 @@ function initLapTimeChart(lapData) {
                 y: timeToSeconds(lap.time),
             };
         }).filter(function (d) { return d.y !== null && d.y > 0; });
+        lapTimes.forEach(function (d) { allTimes.push(d.y); });
 
         datasets.push({
             label: driverCode,
@@ -279,6 +278,13 @@ function initLapTimeChart(lapData) {
 
     var labels = [];
     for (var i = 1; i <= maxLap; i++) labels.push(i);
+
+    // Focus the axis on racing pace: safety-car, pit and red-flag laps can be
+    // minutes long and would otherwise flatten every other lap into a line.
+    allTimes.sort(function (a, b) { return a - b; });
+    var median = allTimes.length ? allTimes[Math.floor(allTimes.length / 2)] : 0;
+    var yMin = allTimes.length ? Math.floor(allTimes[0] - 0.5) : undefined;
+    var yMax = median ? Math.ceil(median * 1.08) : undefined;
 
     new Chart(canvas, {
         type: 'line',
@@ -298,7 +304,7 @@ function initLapTimeChart(lapData) {
                     labels: {
                         usePointStyle: true,
                         pointStyle: 'line',
-                        font: { family: "'JetBrains Mono', monospace", size: 11 },
+                        font: { family: "'IBM Plex Mono', monospace", size: 11 },
                     },
                 },
                 tooltip: {
@@ -322,16 +328,18 @@ function initLapTimeChart(lapData) {
                 x: {
                     title: { display: true, text: 'Lap', font: { weight: '600' } },
                     grid: { color: 'rgba(255, 255, 255, 0.04)' },
-                    ticks: { font: { family: "'JetBrains Mono', monospace", size: 10 } },
+                    ticks: { font: { family: "'IBM Plex Mono', monospace", size: 10 } },
                 },
                 y: {
-                    title: { display: true, text: 'Lap Time (s)', font: { weight: '600' } },
+                    min: yMin,
+                    max: yMax,
+                    title: { display: true, text: 'Lap time (slow SC / pit laps clipped)', font: { weight: '600' } },
                     grid: { color: 'rgba(255, 255, 255, 0.04)' },
                     ticks: {
-                        font: { family: "'JetBrains Mono', monospace", size: 10 },
+                        font: { family: "'IBM Plex Mono', monospace", size: 10 },
                         callback: function (value) {
                             var mins = Math.floor(value / 60);
-                            var secs = (value % 60).toFixed(0);
+                            var secs = Math.round(value % 60);
                             return mins + ':' + (secs < 10 ? '0' : '') + secs;
                         },
                     },
@@ -388,7 +396,7 @@ function initPositionChart(posData) {
                     labels: {
                         usePointStyle: true,
                         pointStyle: 'line',
-                        font: { family: "'JetBrains Mono', monospace", size: 11 },
+                        font: { family: "'IBM Plex Mono', monospace", size: 11 },
                     },
                 },
                 tooltip: {
@@ -408,7 +416,7 @@ function initPositionChart(posData) {
                 x: {
                     title: { display: true, text: 'Lap', font: { weight: '600' } },
                     grid: { color: 'rgba(255, 255, 255, 0.04)' },
-                    ticks: { font: { family: "'JetBrains Mono', monospace", size: 10 } },
+                    ticks: { font: { family: "'IBM Plex Mono', monospace", size: 10 } },
                 },
                 y: {
                     title: { display: true, text: 'Position', font: { weight: '600' } },
@@ -416,7 +424,7 @@ function initPositionChart(posData) {
                     min: 1,
                     grid: { color: 'rgba(255, 255, 255, 0.04)' },
                     ticks: {
-                        font: { family: "'JetBrains Mono', monospace", size: 10 },
+                        font: { family: "'IBM Plex Mono', monospace", size: 10 },
                         stepSize: 1,
                         callback: function (v) { return 'P' + v; },
                     },
@@ -501,7 +509,7 @@ function initComparisonChart(canvasId, data) {
             plugins: {
                 legend: {
                     labels: {
-                        font: { family: "'JetBrains Mono', monospace", size: 12 },
+                        font: { family: "'IBM Plex Mono', monospace", size: 12 },
                         usePointStyle: true,
                     },
                 },
@@ -516,11 +524,11 @@ function initComparisonChart(canvasId, data) {
             scales: {
                 x: {
                     grid: { display: false },
-                    ticks: { font: { family: "'JetBrains Mono', monospace", size: 11, weight: '600' } },
+                    ticks: { font: { family: "'IBM Plex Mono', monospace", size: 11, weight: '600' } },
                 },
                 y: {
                     grid: { color: 'rgba(255, 255, 255, 0.04)' },
-                    ticks: { font: { family: "'JetBrains Mono', monospace", size: 11 } },
+                    ticks: { font: { family: "'IBM Plex Mono', monospace", size: 11 } },
                 },
             },
             animation: { duration: 1200, easing: 'easeOutQuart' },
@@ -1051,7 +1059,7 @@ function _renderSpeedTrace(telemetry, driverCode) {
         ctx.lineTo(w - padding.right, gy);
         ctx.stroke();
         ctx.fillStyle = 'rgba(255,255,255,0.3)';
-        ctx.font = "10px 'JetBrains Mono', monospace";
+        ctx.font = "10px 'IBM Plex Mono', monospace";
         ctx.textAlign = 'right';
         ctx.fillText(spd + '', padding.left - 5, gy + 4);
     }
@@ -1103,7 +1111,7 @@ function _renderSpeedTrace(telemetry, driverCode) {
 
     // X-axis label
     ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = "10px 'JetBrains Mono', monospace";
+    ctx.font = "10px 'IBM Plex Mono', monospace";
     ctx.textAlign = 'center';
     ctx.fillText('Distance (m)', w / 2, h - 5);
 
@@ -1345,7 +1353,7 @@ function initCircuitMap(canvasId, trackPoints, driverMap, sessionKey) {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.font = "bold 9px 'JetBrains Mono', monospace";
+        ctx.font = "bold 9px 'IBM Plex Mono', monospace";
         ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
         ctx.textAlign = 'left';
         ctx.fillText("START/FINISH", pt.x + px * (w + 6), pt.y + py * (w + 6) + 3);
@@ -1419,7 +1427,7 @@ function initCircuitMap(canvasId, trackPoints, driverMap, sessionKey) {
             ctx.lineWidth = 1.5;
             ctx.stroke();
 
-            ctx.font = (isSelected ? "bold 11px" : "bold 9px") + " 'JetBrains Mono', monospace";
+            ctx.font = (isSelected ? "bold 11px" : "bold 9px") + " 'IBM Plex Mono', monospace";
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
             ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';

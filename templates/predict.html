@@ -14,7 +14,7 @@
     <h1 class="predict-title">Race win predictor</h1>
     <p class="predict-subtitle">
       World-class stacking ensemble: XGBoost + LightGBM + CatBoost trained on 8 seasons of F1 data
-      with Elo ratings, circuit history, SHAP explainability, and isotonic probability calibration.
+      with Elo ratings, circuit history, SHAP explainability, and per-race calibrated win probabilities.
     </p>
     {% if next_race %}
     <div class="predict-race-info">
@@ -262,6 +262,7 @@ async function loadPredictions() {
     if (!resp.ok || data.error) {
       show('error');
       document.getElementById('predict-error-msg').textContent = data.error || 'Model unavailable.';
+      if (data.training) waitForTraining();
       return;
     }
     globalData = data;
@@ -498,6 +499,23 @@ function showShapForDriver(driverCode) {
   });
 }
 
+// Poll until the background trainer finishes, then reload predictions.
+let trainingPoll = null;
+function waitForTraining(onDone) {
+  if (trainingPoll) return;
+  trainingPoll = setInterval(async () => {
+    try {
+      const mi = await (await fetch('/api/predict/model-info')).json();
+      if (!mi.training && mi.loaded) {
+        clearInterval(trainingPoll); trainingPoll = null;
+        if (onDone) onDone();
+        hide('error'); hide('results'); show('loading');
+        await loadPredictions();
+      }
+    } catch {}
+  }, 10000);
+}
+
 async function retrain(){
   const btn = document.getElementById('btn-retrain');
   btn.disabled = true; btn.textContent = '⟳ Retraining (may take ~5min)...';
@@ -506,19 +524,8 @@ async function retrain(){
     const d = await r.json();
     if (d.status === 'started') {
       btn.textContent = '⟳ Training in background...';
-      // Poll for completion every 15s
-      const poll = setInterval(async () => {
-        try {
-          const info = await fetch('/api/predict/model-info');
-          const mi = await info.json();
-          if (mi.loaded && mi.oof_mae > 0) {
-            clearInterval(poll);
-            btn.disabled = false; btn.textContent = '↻ Retrain Model';
-            hide('results'); show('loading');
-            await loadPredictions();
-          }
-        } catch {}
-      }, 15000);
+      // The old model keeps serving meanwhile; poll until training ends.
+      waitForTraining(() => { btn.disabled = false; btn.textContent = '↻ Retrain Model'; });
     } else {
       alert('Retrain failed: ' + (d.message || 'Unknown'));
       btn.disabled = false; btn.textContent = '↻ Retrain Model';

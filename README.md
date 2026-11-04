@@ -135,7 +135,7 @@ f1-dashboard/
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/yourusername/f1-dashboard.git
+   git clone https://github.com/vich2601-blip/f1-dashboard.git
    cd f1-dashboard
    ```
 
@@ -241,10 +241,10 @@ The race predictor uses a **3-layer stacking architecture**:
                            │
               ┌────────────┼────────────┐
               │            │            │
-        ┌─────┴─────┐ ┌───┴────┐ ┌─────┴─────┐
-        │  XGBoost   │ │LightGBM│ │ CatBoost  │ ← Base models
-        │ (50 Optuna)│ │(50 HPO)│ │ (50 HPO)  │
-        └────────────┘ └────────┘ └───────────┘
+        ┌─────┴─────┐ ┌─────┴─────┐ ┌─────┴─────┐
+        │  XGBoost  │ │  LightGBM │ │  CatBoost │ ← Base models
+        │ (Optuna)  │ │  (Optuna) │ │  (Optuna) │
+        └────────────┘ └───────────┘ └───────────┘
               │            │            │
         ┌─────┴────────────┴────────────┴─────┐
         │        40+ Engineered Features       │
@@ -266,10 +266,12 @@ The race predictor uses a **3-layer stacking architecture**:
 
 | Environment Variable | Description | Default |
 |---|---|---|
-| `SECRET_KEY` | Flask session secret | Random per-process |
-| `OPENF1_ACCESS_TOKEN` | OpenF1 OAuth token | _(none)_ |
-| `OPENF1_USERNAME` | OpenF1 username | _(none)_ |
-| `OPENF1_PASSWORD` | OpenF1 password | _(none)_ |
+| `PORT` | Web server listening port | `8050` |
+| `SECRET_KEY` | Flask session secret key | Ephemeral random key |
+| `PREDICTOR_OPTUNA_TRIALS` | Number of Optuna tuning trials per base model | `20` |
+| `OPENF1_ACCESS_TOKEN` | OpenF1 OAuth token for live timing | _(none)_ |
+| `OPENF1_USERNAME` | OpenF1 username for auto token refresh | _(none)_ |
+| `OPENF1_PASSWORD` | OpenF1 password for auto token refresh | _(none)_ |
 
 ---
 
